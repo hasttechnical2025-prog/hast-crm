@@ -304,6 +304,39 @@ async function crudCreate(tableName, user, payload) {
     snakePayload.code = await generateCode(tableName);
   }
 
+  // Tự sinh title cho báo giá / đơn hàng nếu thiếu
+  if (['crm_quotes', 'crm_orders'].includes(tableName) && !snakePayload.title) {
+    let customerName = 'Khách hàng';
+    if (snakePayload.customer_id) {
+      try {
+        const { data: c } = await supabase.from('crm_customers').select('name').eq('id', snakePayload.customer_id).single();
+        if (c && c.name) customerName = c.name;
+      } catch (e) {}
+    }
+    const tLabel = tableName === 'crm_quotes' ? 'Báo giá' : 'Đơn hàng';
+    snakePayload.title = `${tLabel} cho ${customerName}`;
+  }
+
+  // Gán title bằng subject cho ticket hỗ trợ nếu thiếu
+  if (tableName === 'crm_support_tickets' && !snakePayload.title && snakePayload.subject) {
+    snakePayload.title = snakePayload.subject;
+  }
+
+  // Gán subject bằng title cho activities nếu thiếu
+  if (tableName === 'crm_activities' && !snakePayload.subject && snakePayload.title) {
+    snakePayload.subject = snakePayload.title;
+  }
+
+  // Gán title bằng name cho opportunities nếu thiếu
+  if (tableName === 'crm_opportunities' && !snakePayload.title && snakePayload.name) {
+    snakePayload.title = snakePayload.name;
+  }
+
+  // Gán name bằng full_name cho contacts nếu thiếu
+  if (tableName === 'crm_contacts' && !snakePayload.name && snakePayload.full_name) {
+    snakePayload.name = snakePayload.full_name;
+  }
+
   // Tự gán các giá trị mặc định cho những bảng thích hợp (chỉ trừ support tickets, workflows, notifications để trống)
   const hasAssignedCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_activities'].includes(tableName);
   const hasDeptCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_workflows'].includes(tableName);
@@ -343,6 +376,20 @@ async function crudUpdate(tableName, user, id, payload) {
 
   let snakePayload = camelToSnake(payload);
   snakePayload = sanitizePayload(snakePayload);
+
+  // Safety mappings for update
+  if (tableName === 'crm_support_tickets' && snakePayload.subject !== undefined && snakePayload.title === undefined) {
+    snakePayload.title = snakePayload.subject;
+  }
+  if (tableName === 'crm_activities' && snakePayload.title !== undefined && snakePayload.subject === undefined) {
+    snakePayload.subject = snakePayload.title;
+  }
+  if (tableName === 'crm_opportunities' && snakePayload.name !== undefined && snakePayload.title === undefined) {
+    snakePayload.title = snakePayload.name;
+  }
+  if (tableName === 'crm_contacts' && snakePayload.full_name !== undefined && snakePayload.name === undefined) {
+    snakePayload.name = snakePayload.full_name;
+  }
 
   delete snakePayload.id;
   delete snakePayload.created_by;
