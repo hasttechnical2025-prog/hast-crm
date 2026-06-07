@@ -6586,9 +6586,34 @@ document.getElementById('form-customer').addEventListener('submit', async (e) =>
   const data = extractFormData(e.target);
   // Convert number fields
   ['ratingStars','creditLimit','purchaseCycle'].forEach(k => { if (data[k] !== '') data[k] = Number(data[k]); });
+
   try {
+    // 💡 NEW FEATURE: Kiểm tra trùng lặp trước khi lưu
+    showLoading('Đang kiểm tra dữ liệu...');
     if (state.currentEditing) {
       data.id = state.currentEditing.id;
+    }
+    const duplicates = await api('customer.findDuplicates', { customerData: data }, {}, { silent: true });
+    hideLoading();
+
+    if (duplicates && duplicates.length > 0) {
+      let msg = `<p style="margin-bottom:10px;">Phát hiện <strong>${duplicates.length} khách hàng</strong> trên hệ thống có thông tin trùng lặp:</p><ul style="padding-left:20px;margin-bottom:15px;color:var(--danger)">`;
+      duplicates.forEach(d => {
+         msg += `<li style="margin-bottom:4px;"><b>${escapeHtml(d.code)}</b> - ${escapeHtml(d.name)} <br><small><i>(Lý do: ${escapeHtml(d.duplicateReason)})</i></small></li>`;
+      });
+      msg += `</ul><p>Bạn có chắc chắn vẫn muốn tiếp tục lưu hồ sơ này không?</p>`;
+
+      const confirm = await confirmDialog({
+        title: 'Cảnh báo trùng lặp',
+        message: msg,
+        type: 'warning',
+        okText: 'Vẫn lưu',
+        cancelText: 'Hủy, để tôi kiểm tra lại'
+      });
+      if (!confirm) return; // User cancelled
+    }
+
+    if (state.currentEditing) {
       await api('customer.update', data);
       toast('Đã cập nhật khách hàng', 'success');
     } else {
@@ -6598,6 +6623,7 @@ document.getElementById('form-customer').addEventListener('submit', async (e) =>
     closeAllDrawers();
     loadCustomers();
   } catch (err) {
+    hideLoading();
     toast(err.message, 'error');
   }
 });

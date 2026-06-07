@@ -39,25 +39,48 @@ async function customerReject(currentUser, id, reason) {
   return crudUpdate('crm_customers', currentUser, id, updates);
 }
 
-async function customerFindDuplicates(currentUser, customerId) {
-  const customer = await crudGet('crm_customers', currentUser, customerId);
+async function customerFindDuplicates(currentUser, dataToCheck) {
+  let customer;
+  let ignoreId = null;
+
+  if (typeof dataToCheck === 'string') {
+    customer = await crudGet('crm_customers', currentUser, dataToCheck);
+    ignoreId = dataToCheck;
+  } else if (dataToCheck && typeof dataToCheck === 'object') {
+    if (dataToCheck.id) {
+      customer = await crudGet('crm_customers', currentUser, dataToCheck.id);
+      ignoreId = dataToCheck.id;
+    } else {
+      customer = dataToCheck;
+    }
+  } else {
+    const error = new Error('BAD_REQUEST: Thiếu thông tin khách hàng để kiểm tra trùng lặp');
+    error.code = 'BAD_REQUEST';
+    throw error;
+  }
 
   const { data: allCustomers, error } = await supabase
     .from('crm_customers')
-    .select('*')
+    .select('id, code, name, phone, email, tax_code')
     .eq('is_deleted', false);
 
   if (error) throw error;
 
   const duplicates = [];
   allCustomers.forEach(other => {
-    if (other.id === customerId) return;
+    if (ignoreId && other.id === ignoreId) return;
+
     const reasons = [];
-    if (customer.phone && other.phone === customer.phone) reasons.push('Trùng SĐT');
-    if (customer.email && other.email === customer.email) reasons.push('Trùng Email');
-    if (customer.taxCode && other.tax_code === customer.taxCode) reasons.push('Trùng MST');
-    if (customer.name && other.name &&
-        String(other.name).toLowerCase().trim() === String(customer.name).toLowerCase().trim()) reasons.push('Trùng tên');
+    const checkPhone = customer.phone;
+    const checkEmail = customer.email;
+    const checkTaxCode = customer.taxCode || customer.tax_code;
+    const checkName = customer.name;
+
+    if (checkPhone && other.phone === checkPhone) reasons.push('Trùng SĐT');
+    if (checkEmail && other.email === checkEmail) reasons.push('Trùng Email');
+    if (checkTaxCode && other.tax_code === checkTaxCode) reasons.push('Trùng MST');
+    if (checkName && other.name &&
+        String(other.name).toLowerCase().trim() === String(checkName).toLowerCase().trim()) reasons.push('Trùng tên');
 
     if (reasons.length > 0) {
       duplicates.push({

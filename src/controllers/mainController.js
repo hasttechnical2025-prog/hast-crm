@@ -117,7 +117,7 @@ async function handleRequest(req, res) {
         result = await customerReject(currentUser, payload.id, payload.reason);
         return res.json({ success: true, data: result, message: 'Đã từ chối khách hàng' });
       } else if (method === 'findDuplicates') {
-        result = await customerFindDuplicates(currentUser, params.id || payload.id);
+        result = await customerFindDuplicates(currentUser, params.id || payload.id || payload.customerData);
         return res.json({ success: true, data: result });
       } else if (method === 'merge') {
         result = await customerMerge(currentUser, payload.primaryId, payload.secondaryIds);
