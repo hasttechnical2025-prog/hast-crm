@@ -8,13 +8,13 @@ const { generateSalt, hashPassword } = require('../utils/crypto');
 async function applyPermissionFilter(query, user, hasDeptField = true, hasAssignedField = true, tableName = null) {
   // Notifications filter by user_id
   if (tableName === 'crm_notifications') {
-    if (user.role === 'admin' || user.role === 'boss') return query;
-    return query.eq('user_id', user.id);
+    if (user.role === 'admin' || user.role === 'boss') return { q: query };
+    return { q: query.eq('user_id', user.id) };
   }
 
   // Khách hàng filter theo visibility
   if (tableName === 'crm_customers') {
-    if (user.role === 'admin' || user.role === 'boss') return query;
+    if (user.role === 'admin' || user.role === 'boss') return { q: query };
 
     let parts = [`created_by.eq.${user.id}`];
 
@@ -50,16 +50,16 @@ async function applyPermissionFilter(query, user, hasDeptField = true, hasAssign
       }
     }
 
-    return query.or(parts.join(','));
+    return { q: query.or(parts.join(',')) };
   }
 
   // Nếu bảng không có cả 2 trường này (VD: products, tags), ai cũng được xem tất cả
   if (!hasDeptField && !hasAssignedField) {
-    return query;
+    return { q: query };
   }
 
   if (user.role === 'admin' || user.role === 'boss') {
-    return query; // Không lọc, xem toàn bộ
+    return { q: query }; // Không lọc, xem toàn bộ
   }
 
   if (user.role === 'manager') {
@@ -72,9 +72,9 @@ async function applyPermissionFilter(query, user, hasDeptField = true, hasAssign
       filterString += `assigned_to.eq.${user.id}`;
     }
     if (filterString) {
-      return query.or(filterString);
+      return { q: query.or(filterString) };
     }
-    return query;
+    return { q: query };
   }
 
   // staff: Chỉ xem bản ghi được giao cho mình HOẶC do mình tạo
@@ -82,7 +82,7 @@ async function applyPermissionFilter(query, user, hasDeptField = true, hasAssign
   if (hasAssignedField) {
     filterParts.push(`assigned_to.eq.${user.id}`);
   }
-  return query.or(filterParts.join(','));
+  return { q: query.or(filterParts.join(',')) };
 }
 
 // =====================================
@@ -104,7 +104,8 @@ async function crudList(tableName, user, params) {
   const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders'].includes(tableName);
   const hasAssignedField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers'].includes(tableName);
 
-  query = await applyPermissionFilter(query, user, hasDeptField, hasAssignedField, tableName);
+  const filterResult = await applyPermissionFilter(query, user, hasDeptField, hasAssignedField, tableName);
+  query = filterResult.q;
 
   // Áp dụng tìm kiếm
   if (search) {
