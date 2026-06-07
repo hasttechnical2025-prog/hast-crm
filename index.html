@@ -4590,10 +4590,16 @@ const state = {
  * Backend đã được code để parse JSON từ e.postData.contents, mà FormData/URLSearchParams
  * cũng đặt nội dung vào e.postData.contents, nên backend đọc được.
  */
-async function api(action, payload = null, params = {}) {
+async function api(action, payload = null, params = {}, options = {}) {
   // Bật màng che loading đối với các tác vụ ghi/sửa/xoá (mutations) để người dùng không tưởng app bị treo
-  const isMutation = !action.includes('.list') && !action.includes('.get') && !action.includes('auth.me');
-  if (isMutation) showLoading('Đang xử lý...');
+  const isMutation = !action.includes('.list') &&
+                     !action.includes('.get') &&
+                     !action.includes('auth.me') &&
+                     !action.includes('report.dashboard') &&
+                     action !== 'auth.login';
+
+  const useLoader = isMutation && !options.silent;
+  if (useLoader) showLoading('Đang xử lý...');
 
   try {
     // Nếu sử dụng Node.js API (Chạy cục bộ hoặc Vercel)
@@ -4643,7 +4649,7 @@ async function api(action, payload = null, params = {}) {
     });
     return await parseResponse(res);
   } finally {
-    if (isMutation) hideLoading();
+    if (useLoader) hideLoading();
   }
 }
 
@@ -10275,7 +10281,7 @@ async function doImportCustomers(validItems) {
   for (let i = 0; i < validItems.length; i++) {
     try {
       document.getElementById('loading-text').textContent = `Đang nhập ${i+1}/${validItems.length}...`;
-      await api('customer.create', validItems[i].data);
+      await api('customer.create', validItems[i].data, {}, { silent: true });
       success++;
     } catch (e) {
       failed++;
@@ -10301,7 +10307,7 @@ async function exportSalesDoc(type, id, format) {
   showLoading(`Đang tạo file ${format.toUpperCase()}...`);
   try {
     const action = type === 'quote' ? 'quote.export' : 'order.export';
-    const r = await api(action, { id: id, format: format });
+    const r = await api(action, { id: id, format: format }, {}, { silent: true });
     hideLoading();
     if (r && r.downloadUrl) {
       showExportResult(r, format);
