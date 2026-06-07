@@ -134,6 +134,30 @@ async function handleRequest(req, res) {
         result = await notificationMarkAllRead(currentUser);
         return res.json({ success: true, data: result });
       }
+    } else if (entity === 'quote') {
+      if (method === 'export') {
+        const downloadUrl = `/api/export?type=quote&id=${payload.id}&format=${payload.format || 'docx'}&token=${token}`;
+        return res.json({
+          success: true,
+          data: {
+            downloadUrl,
+            fileName: `BaoGia_${payload.id}.${payload.format || 'docx'}`,
+            fileId: payload.id
+          }
+        });
+      }
+    } else if (entity === 'order') {
+      if (method === 'export') {
+        const downloadUrl = `/api/export?type=order&id=${payload.id}&format=${payload.format || 'docx'}&token=${token}`;
+        return res.json({
+          success: true,
+          data: {
+            downloadUrl,
+            fileName: `DonHang_${payload.id}.${payload.format || 'docx'}`,
+            fileId: payload.id
+          }
+        });
+      }
     }
 
     if (entityToTable[entity]) {

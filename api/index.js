@@ -4,6 +4,7 @@ const morgan = require('morgan');
 require('dotenv').config();
 
 const { handleRequest } = require('../src/controllers/mainController');
+const { handleExport } = require('../src/controllers/exportController');
 
 const app = express();
 
@@ -15,6 +16,7 @@ app.use(morgan('dev'));
 
 // Routing
 app.post('/api', handleRequest);
+app.get('/api/export', handleExport);
 
 // Khởi chạy server local
 if (process.env.NODE_ENV !== 'production') {
