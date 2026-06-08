@@ -12,13 +12,14 @@ import {
   initDateInputs,
   setCustomInputValue,
   getCustomInputValue,
-  extractFormData
+  extractFormData,
+  initColumnCustomizer
 } from './utils.js';
 
 // Import modules to ensure they register or run
 import './modules/dashboard.js';
 import './modules/notifications.js';
-import './modules/customers.js';
+import { CUSTOMERS_COLUMNS } from './modules/customers.js';
 import './modules/sales.js';
 import './modules/tickets.js';
 import './modules/marketing.js';
@@ -213,12 +214,30 @@ async function showApp() {
   
   await loadAppSettings(); // Load logo, VAT, company name từ Settings
   applyRoleVisibility();   // Ẩn nút theo quyền
+
+  // Khởi tạo Custom Columns cho tab Khách hàng
+  initColumnCustomizer('customers', 'customers-table-wrap', 'col-cust-dropdown', 'col-cust-container', CUSTOMERS_COLUMNS);
+
   await loadDashboard();
   lucide.createIcons();
-  
+
   // Phase 4C: Bắt đầu polling notification mỗi 60 giây
   startNotificationPolling();
 }
+
+// Bật tắt Custom Column Dropdown
+document.getElementById('btn-col-cust')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const dropdown = document.getElementById('col-cust-dropdown');
+  if (dropdown) dropdown.classList.toggle('show');
+});
+// Đóng khi click ngoài (đã có event listener click ngoài ở notifications.js nhưng ta gom thêm vào đây)
+document.addEventListener('click', (e) => {
+  const dropdown = document.getElementById('col-cust-dropdown');
+  if (dropdown && !e.target.closest('#btn-col-cust') && !e.target.closest('#col-cust-dropdown')) {
+    dropdown.classList.remove('show');
+  }
+});
 
 // Phase 4C: Polling cho notification badge
 let _notifPollInterval = null;

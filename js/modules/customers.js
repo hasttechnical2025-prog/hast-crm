@@ -23,7 +23,8 @@ import {
   setCustomInputValue,
   getCustomInputValue,
   extractFormData,
-  timeAgo
+  timeAgo,
+  syncColumnVisibility
 } from '../utils.js';
 
 // ============================================================
@@ -317,6 +318,18 @@ export async function loadCustomers(page) {
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
+export const CUSTOMERS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'name', label: 'Tên khách hàng', required: true },
+  { key: 'phone', label: 'Điện thoại' },
+  { key: 'email', label: 'Email' },
+  { key: 'classification', label: 'Phân loại' },
+  { key: 'revenue', label: 'Doanh thu' },
+  { key: 'debt', label: 'Công nợ' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
+
 export function renderCustomers() {
   const st = state.customers;
   document.getElementById('customers-count').textContent = `Tổng ${formatNumber(st.total)} khách hàng`;
@@ -328,21 +341,21 @@ export function renderCustomers() {
   }
   tbody.innerHTML = st.items.map(c => `
     <tr onclick="openCustomerDetail('${c.id}')">
-      <td>
+      <td data-col="code">
         ${c.externalCode ? `<strong>${escapeHtml(c.externalCode)}</strong><br>` : ''}
         <span class="code" style="font-size:11px;color:var(--ink-3)">${escapeHtml(c.code||'')}</span>
       </td>
-      <td>
+      <td data-col="name">
         <strong>${escapeHtml(c.name||'')}</strong>
         ${visibilityBadge(c.visibility)}
       </td>
-      <td>${formatPhone(c.phone)}</td>
-      <td>${escapeHtml(c.email||'')}</td>
-      <td>${classBadge(c.classification)}</td>
-      <td class="text-right">${formatShortMoney(c.totalRevenue||0)}</td>
-      <td class="text-right" style="color:${c.currentDebt>0?'var(--danger)':'var(--ink-3)'}">${formatShortMoney(c.currentDebt||0)}</td>
-      <td>${approvalBadge(c.approvalStatus)}</td>
-      <td class="col-actions" onclick="event.stopPropagation()">
+      <td data-col="phone">${formatPhone(c.phone)}</td>
+      <td data-col="email">${escapeHtml(c.email||'')}</td>
+      <td data-col="classification">${classBadge(c.classification)}</td>
+      <td data-col="revenue" class="text-right">${formatShortMoney(c.totalRevenue||0)}</td>
+      <td data-col="debt" class="text-right" style="color:${c.currentDebt>0?'var(--danger)':'var(--ink-3)'}">${formatShortMoney(c.currentDebt||0)}</td>
+      <td data-col="status">${approvalBadge(c.approvalStatus)}</td>
+      <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
         <div class="row-actions">
           <button class="row-action-btn" onclick="openCustomerForm('${c.id}')" title="Sửa"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
           <button class="row-action-btn danger" onclick="deleteCustomer('${c.id}')" title="Xoá"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
@@ -351,6 +364,7 @@ export function renderCustomers() {
     </tr>
   `).join('');
   lucide.createIcons();
+  syncColumnVisibility('customers', 'customers-table-wrap', CUSTOMERS_COLUMNS);
   renderPagination('customers-pagination', st, 'loadCustomers');
 }
 

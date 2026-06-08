@@ -2467,3 +2467,52 @@ input[data-format="date"], input[data-format="datetime"], input[data-format="pho
   #screen-login { grid-template-columns: 1fr; }
   .login-art { display: none; }
 }
+
+/* =========================================================
+   COLUMN CUSTOMIZER (Tùy chỉnh hiển thị cột)
+   ========================================================= */
+.col-customizer-dropdown {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: 200px;
+  background: var(--paper-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  display: none;
+  padding: 12px;
+  text-align: left;
+}
+.col-customizer-dropdown.show {
+  display: block;
+}
+.col-customizer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+  cursor: pointer;
+  color: var(--ink-2);
+  user-select: none;
+}
+.col-customizer-item input {
+  cursor: pointer;
+}
+.col-customizer-item.required {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.col-customizer-item.required input {
+  cursor: not-allowed;
+}
+
+/* Dynamic hiding styles for tables */
+.table-wrap.hide-col-phone [data-col="phone"] { display: none !important; }
+.table-wrap.hide-col-email [data-col="email"] { display: none !important; }
+.table-wrap.hide-col-classification [data-col="classification"] { display: none !important; }
+.table-wrap.hide-col-revenue [data-col="revenue"] { display: none !important; }
+.table-wrap.hide-col-debt [data-col="debt"] { display: none !important; }
+.table-wrap.hide-col-status [data-col="status"] { display: none !important; }

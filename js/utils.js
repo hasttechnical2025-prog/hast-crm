@@ -572,7 +572,73 @@ export function timeAgo(s) {
   return formatDateVN(s);
 }
 
+// ============================================================
+// COLUMN CUSTOMIZER (Tùy chỉnh cột)
+// ============================================================
+export function initColumnCustomizer(tabName, tableWrapId, dropdownId, containerId, columnsDef) {
+  const container = document.getElementById(containerId);
+  const dropdown = document.getElementById(dropdownId);
+  const tableWrap = document.getElementById(tableWrapId);
+  if (!container || !dropdown || !tableWrap) return;
 
+  const storageKey = `hast_crm_cols_${tabName}`;
+  let saved = localStorage.getItem(storageKey);
+  let visibleCols = saved ? JSON.parse(saved) : columnsDef.map(c => c.key);
+
+  // Áp dụng lớp CSS khởi tạo
+  applyColumnClasses(tableWrap, columnsDef, visibleCols);
+
+  // Render các checkbox
+  container.innerHTML = columnsDef.map(col => {
+    const isChecked = visibleCols.includes(col.key);
+    const isRequired = col.required;
+    return `
+      <label class="col-customizer-item ${isRequired ? 'required' : ''}">
+        <input type="checkbox" data-key="${col.key}" ${isChecked ? 'checked' : ''} ${isRequired ? 'disabled' : ''} />
+        <span>${escapeHtml(col.label)}</span>
+      </label>
+    `;
+  }).join('');
+
+  // Xử lý sự kiện khi thay đổi checkbox
+  container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const key = cb.dataset.key;
+      const col = columnsDef.find(c => c.key === key);
+      if (col && col.required) {
+        cb.checked = true; // Không cho phép tắt cột bắt buộc
+        return;
+      }
+
+      if (cb.checked) {
+        if (!visibleCols.includes(key)) visibleCols.push(key);
+      } else {
+        visibleCols = visibleCols.filter(k => k !== key);
+      }
+
+      localStorage.setItem(storageKey, JSON.stringify(visibleCols));
+      applyColumnClasses(tableWrap, columnsDef, visibleCols);
+    });
+  });
+}
+
+function applyColumnClasses(tableWrap, columnsDef, visibleCols) {
+  columnsDef.forEach(col => {
+    if (col.required) return;
+    const hideClass = `hide-col-${col.key}`;
+    const isVisible = visibleCols.includes(col.key);
+    tableWrap.classList.toggle(hideClass, !isVisible);
+  });
+}
+
+export function syncColumnVisibility(tabName, tableWrapId, columnsDef) {
+  const tableWrap = document.getElementById(tableWrapId);
+  if (!tableWrap) return;
+  const storageKey = `hast_crm_cols_${tabName}`;
+  const saved = localStorage.getItem(storageKey);
+  const visibleCols = saved ? JSON.parse(saved) : columnsDef.map(c => c.key);
+  applyColumnClasses(tableWrap, columnsDef, visibleCols);
+}
 
 // Expose to window for HTML inline event handlers
 window.toast = toast;
@@ -602,3 +668,5 @@ window.setCustomInputValue = setCustomInputValue;
 window.getCustomInputValue = getCustomInputValue;
 window.extractFormData = extractFormData;
 window.timeAgo = timeAgo;
+window.initColumnCustomizer = initColumnCustomizer;
+window.syncColumnVisibility = syncColumnVisibility;
