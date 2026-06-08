@@ -261,22 +261,57 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// Phase 4C: Polling cho notification badge
-let _notifPollInterval = null;
+// Phase 4C: Polling cho notification badge & Đồng bộ dữ liệu Realtime không làm gián đoạn (Silent Sync)
+let _realtimeSyncInterval = null;
+
 function startNotificationPolling() {
-  // Dừng polling cũ nếu có (vd: khi user logout/login lại)
-  if (_notifPollInterval) clearInterval(_notifPollInterval);
+  if (_realtimeSyncInterval) clearInterval(_realtimeSyncInterval);
+
   // Load lần đầu tiên ngay
   updateNotifBadge();
-  // Sau đó cứ 60s 1 lần
-  _notifPollInterval = setInterval(() => {
-    if (state.user) updateNotifBadge();
-  }, 60000);
+
+  // Chạy chu kỳ 30 giây một lần
+  _realtimeSyncInterval = setInterval(async () => {
+    if (!state.user) return;
+
+    // 1. Đồng bộ số lượng thông báo chưa đọc
+    updateNotifBadge();
+
+    // 2. Đồng bộ ngầm danh sách của Tab đang xem (nếu có hỗ trợ load)
+    const tab = state.currentTab;
+    const opts = { silent: true };
+
+    try {
+      if (tab === 'customers' && typeof window.loadCustomers === 'function') {
+        await window.loadCustomers(null, opts);
+      } else if (tab === 'contacts' && typeof window.loadContacts === 'function') {
+        await window.loadContacts(null, opts);
+      } else if (tab === 'activities' && typeof window.loadActivities === 'function') {
+        await window.loadActivities(null, opts);
+      } else if (tab === 'sales') {
+        const subTab = document.querySelector('[data-panel="sales"] .sub-tab.active')?.dataset.subtab;
+        if (subTab === 'opportunities' && typeof window.loadOpps === 'function') {
+          await window.loadOpps(null, opts);
+        } else if (subTab === 'quotes' && typeof window.loadQuotes === 'function') {
+          await window.loadQuotes(null, opts);
+        } else if (subTab === 'orders' && typeof window.loadOrders === 'function') {
+          await window.loadOrders(null, opts);
+        }
+      } else if (tab === 'support' && typeof window.loadTickets === 'function') {
+        await window.loadTickets(null, opts);
+      } else if (tab === 'marketing' && typeof window.loadCampaigns === 'function') {
+        await window.loadCampaigns(null, opts);
+      }
+    } catch (e) {
+      console.warn('Đồng bộ ngầm thất bại:', e.message);
+    }
+  }, 30000); // 30 giây
 }
+
 function stopNotificationPolling() {
-  if (_notifPollInterval) {
-    clearInterval(_notifPollInterval);
-    _notifPollInterval = null;
+  if (_realtimeSyncInterval) {
+    clearInterval(_realtimeSyncInterval);
+    _realtimeSyncInterval = null;
   }
 }
 

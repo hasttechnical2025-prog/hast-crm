@@ -42,25 +42,29 @@ export const TICKETS_COLUMNS = [
 // =============================================================
 // TAB 6: TICKETS (Hỗ trợ kỹ thuật)
 // =============================================================
-export async function loadTickets(page) {
+export async function loadTickets(page, options = {}) {
   if (page) state.tickets.page = page;
   const st = state.tickets;
   const tbody = document.getElementById('tickets-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.status) params.status = st.filters.status;
     if (st.filters.priority) params.priority = st.filters.priority;
     if (st.filters.category) params.category = st.filters.category;
-    const r = await api('ticket.list', null, params);
+    const r = await api('ticket.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     // Load song song KH + Users để có tên hiển thị
     await Promise.all([ensureAllCustomers(), ensureAllUsers()]);
     renderTickets();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }

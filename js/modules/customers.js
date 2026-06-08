@@ -297,24 +297,28 @@ export async function checkGlobalDuplicates() {
   }
 }
 
-export async function loadCustomers(page) {
+export async function loadCustomers(page, options = {}) {
   if (page) state.customers.page = page;
   const st = state.customers;
   const tbody = document.getElementById('customers-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.classification) params.classification = st.filters.classification;
     if (st.filters.approvalStatus) params.approvalStatus = st.filters.approvalStatus;
-    const r = await api('customer.list', null, params);
+    const r = await api('customer.list', null, params, options); // pass options to avoid fullscreen loader on error/etc
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     renderCustomers();
     state.allCustomers = []; // reset cache khi list thay đổi
     checkGlobalDuplicates();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
@@ -696,22 +700,26 @@ export function debounce(fn, ms) {
 // =============================================================
 // TAB 3: CONTACTS
 // =============================================================
-export async function loadContacts(page) {
+export async function loadContacts(page, options = {}) {
   if (page) state.contacts.page = page;
   const st = state.contacts;
   const tbody = document.getElementById('contacts-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.customerId) params.customerId = st.filters.customerId;
-    const r = await api('contact.list', null, params);
+    const r = await api('contact.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     renderContacts();
     await populateCustomerDropdown('contacts-filter-customer', true);
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
@@ -832,22 +840,26 @@ document.getElementById('contacts-filter-customer').addEventListener('change', e
 // =============================================================
 // TAB 4: ACTIVITIES
 // =============================================================
-export async function loadActivities(page) {
+export async function loadActivities(page, options = {}) {
   if (page) state.activities.page = page;
   const st = state.activities;
   const tbody = document.getElementById('activities-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.type) params.type = st.filters.type;
     if (st.filters.status) params.status = st.filters.status;
-    const r = await api('activity.list', null, params);
+    const r = await api('activity.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     renderActivities();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="7" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }

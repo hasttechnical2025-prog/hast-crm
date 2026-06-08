@@ -42,22 +42,26 @@ export const CAMPAIGNS_COLUMNS = [
 // =============================================================
 // TAB 7: CAMPAIGNS (Marketing)
 // =============================================================
-export async function loadCampaigns(page) {
+export async function loadCampaigns(page, options = {}) {
   if (page) state.campaigns.page = page;
   const st = state.campaigns;
   const tbody = document.getElementById('campaigns-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.type) params.type = st.filters.type;
     if (st.filters.status) params.status = st.filters.status;
-    const r = await api('campaign.list', null, params);
+    const r = await api('campaign.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     renderCampaigns();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="9" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }

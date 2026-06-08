@@ -76,22 +76,26 @@ document.querySelectorAll('[data-panel="sales"] .sub-tab').forEach(t => {
 });
 
 // ====== OPPORTUNITIES ======
-export async function loadOpps(page) {
+export async function loadOpps(page, options = {}) {
   if (page) state.opps.page = page;
   const st = state.opps;
   const tbody = document.getElementById('opps-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.stage) params.stage = st.filters.stage;
-    const r = await api('opportunity.list', null, params);
+    const r = await api('opportunity.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     await ensureAllCustomers();
     renderOpps();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
@@ -179,22 +183,26 @@ document.getElementById('opps-filter-stage').addEventListener('change', e => {
 });
 
 // ====== QUOTES ======
-export async function loadQuotes(page) {
+export async function loadQuotes(page, options = {}) {
   if (page) state.quotes.page = page;
   const st = state.quotes;
   const tbody = document.getElementById('quotes-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.status) params.status = st.filters.status;
-    const r = await api('quote.list', null, params);
+    const r = await api('quote.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     await ensureAllCustomers();
     renderQuotes();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="7" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
@@ -251,23 +259,27 @@ document.getElementById('quotes-filter-status').addEventListener('change', e => 
 });
 
 // ====== ORDERS ======
-export async function loadOrders(page) {
+export async function loadOrders(page, options = {}) {
   if (page) state.orders.page = page;
   const st = state.orders;
   const tbody = document.getElementById('orders-tbody');
-  tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  if (!options.silent) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8" class="empty-state"><div class="spinner dark"></div> Đang tải...</td></tr>';
+  }
   try {
     const params = { page: st.page, pageSize: st.pageSize };
     if (st.search) params.search = st.search;
     if (st.filters.status) params.status = st.filters.status;
     if (st.filters.paymentStatus) params.paymentStatus = st.filters.paymentStatus;
-    const r = await api('order.list', null, params);
+    const r = await api('order.list', null, params, options);
     st.items = r.items || [];
     st.total = r.pagination?.total || 0;
     await ensureAllCustomers();
     renderOrders();
   } catch (e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    if (!options.silent) {
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="8" class="empty-state">Lỗi: ${escapeHtml(e.message)}</td></tr>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
