@@ -53,6 +53,25 @@ async function applyPermissionFilter(query, user, hasDeptField = true, hasAssign
     return { q: query.or(parts.join(',')) };
   }
 
+  // Khóa chặn liên hệ (Contact) - Phải theo tệp khách hàng được phép xem
+  if (tableName === 'crm_contacts') {
+    if (user.role === 'admin' || user.role === 'boss') return { q: query };
+
+    // Đệ quy lấy truy vấn cho danh sách KH được phép xem
+    const customerQuery = supabase.from('crm_customers').select('id').eq('is_deleted', false);
+    const filterResult = await applyPermissionFilter(customerQuery, user, true, true, 'crm_customers');
+    const { data: allowedCustomers } = await filterResult.q;
+    const allowedCustomerIds = (allowedCustomers || []).map(c => c.id);
+
+    if (allowedCustomerIds.length === 0) {
+      // Nếu không xem được khách nào, cũng không xem được liên hệ nào
+      return { q: query.eq('id', '00000000-0000-0000-0000-000000000000') };
+    }
+
+    // Nhân viên chỉ được xem Liên hệ mà (thuộc khách hàng được xem) HOẶC (do chính họ tạo)
+    return { q: query.or(`customer_id.in.(${allowedCustomerIds.join(',')}),created_by.eq.${user.id}`) };
+  }
+
   // Nếu bảng không có cả 2 trường này (VD: products, tags), ai cũng được xem tất cả
   if (!hasDeptField && !hasAssignedField) {
     return { q: query };
