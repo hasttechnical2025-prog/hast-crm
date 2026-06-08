@@ -597,6 +597,7 @@ export async function openCustomerDetail(id) {
             <div class="detail-row"><div class="label">Xếp hạng</div><div class="value" style="color:var(--accent)">${'★'.repeat(c.ratingStars||0)}${'☆'.repeat(5-(c.ratingStars||0))}</div></div>
             <div class="detail-row"><div class="label">Trạng thái</div><div class="value">${approvalBadge(c.approvalStatus)}</div></div>
             <div class="detail-row"><div class="label">Nguồn</div><div class="value">${escapeHtml(c.source||'-')}</div></div>
+            <div class="detail-row"><div class="label">Người tạo</div><div class="value">${c.creator ? escapeHtml(c.creator.fullName) : '-'}</div></div>
           </div>
         </div>
         <div>

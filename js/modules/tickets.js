@@ -118,9 +118,23 @@ export async function openTicketForm(id) {
         if (inp && inp.type !== 'submit') setCustomInputValue(inp, t[k]);
       });
       document.getElementById('drawer-ticket-title').textContent = 'Sửa ticket - ' + t.code;
+
+      // Hiển thị người tạo
+      const creatorField = document.getElementById('ticket-creator-field');
+      const creatorNameInp = document.getElementById('ticket-creator-name');
+      if (creatorField && creatorNameInp) {
+        if (t.creator) {
+          creatorField.style.display = '';
+          creatorNameInp.value = t.creator.fullName || '-';
+        } else {
+          creatorField.style.display = 'none';
+        }
+      }
     }
   } else {
     document.getElementById('drawer-ticket-title').textContent = 'Tạo ticket hỗ trợ';
+    const creatorField = document.getElementById('ticket-creator-field');
+    if (creatorField) creatorField.style.display = 'none';
   }
   openDrawer('drawer-ticket');
 }
