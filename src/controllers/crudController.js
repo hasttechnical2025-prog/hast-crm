@@ -243,11 +243,22 @@ async function crudGet(tableName, user, id) {
 
       let hasImplicitAccess = false;
       if (!isCreator && !isAssigned && !isPublic) {
-        // Cấp quyền đọc ẩn (Implicit Access) nếu người dùng được giao một Ticket hoặc Activity thuộc KH này
-        const { count: tCount } = await supabase.from('crm_support_tickets').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).eq('assigned_to', user.id).eq('is_deleted', false);
+        let implicitAssignedFilter = `assigned_to.eq.${user.id}`;
+
+        // Nếu là manager, kiểm tra xem có ai trong phòng ban được gán không
+        if (user.role === 'manager' && user.department_id) {
+          const { data: deptUsers } = await supabase.from('crm_users').select('id').eq('department_id', user.department_id).eq('is_deleted', false);
+          if (deptUsers && deptUsers.length > 0) {
+            const userIds = deptUsers.map(u => u.id);
+            implicitAssignedFilter = `assigned_to.in.(${userIds.join(',')})`;
+          }
+        }
+
+        // Cấp quyền đọc ẩn (Implicit Access) nếu có Ticket hoặc Activity thuộc KH này được gán (theo filter trên)
+        const { count: tCount } = await supabase.from('crm_support_tickets').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).or(implicitAssignedFilter).eq('is_deleted', false);
         if (tCount && tCount > 0) hasImplicitAccess = true;
         else {
-          const { count: aCount } = await supabase.from('crm_activities').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).eq('assigned_to', user.id).eq('is_deleted', false);
+          const { count: aCount } = await supabase.from('crm_activities').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).or(implicitAssignedFilter).eq('is_deleted', false);
           if (aCount && aCount > 0) hasImplicitAccess = true;
         }
       }
@@ -266,8 +277,8 @@ async function crudGet(tableName, user, id) {
         }
       }
     } else {
-      const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders'].includes(tableName);
-      const hasAssignedField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities'].includes(tableName);
+      const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities'].includes(tableName);
+      const hasAssignedField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers'].includes(tableName);
 
       if (!hasDeptField && !hasAssignedField) {
         // Không lọc
