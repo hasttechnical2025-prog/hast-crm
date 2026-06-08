@@ -412,11 +412,24 @@ async function crudUpdate(tableName, user, id, payload) {
     throw error;
   }
 
-  // Kiểm tra quyền
-  await crudGet(tableName, user, id);
+  // Kiểm tra quyền và lấy dữ liệu hiện tại
+  const existingData = await crudGet(tableName, user, id);
 
   let snakePayload = camelToSnake(payload);
   snakePayload = sanitizePayload(snakePayload);
+
+  // Smart Re-approval: Tự động bắt duyệt lại nếu thay đổi thông tin pháp lý quan trọng của Khách hàng
+  if (tableName === 'crm_customers') {
+    if (existingData.approvalStatus === 'approved') {
+      const nameChanged = snakePayload.name && snakePayload.name !== existingData.name;
+      const taxCodeChanged = snakePayload.tax_code !== undefined && snakePayload.tax_code !== existingData.taxCode;
+
+      if (nameChanged || taxCodeChanged) {
+        snakePayload.approval_status = 'pending';
+        snakePayload.approval_reason = '[Hệ thống] Tự động yêu cầu duyệt lại do sửa đổi thông tin quan trọng (Tên / MST).';
+      }
+    }
+  }
 
   delete snakePayload.id;
   delete snakePayload.created_by;
