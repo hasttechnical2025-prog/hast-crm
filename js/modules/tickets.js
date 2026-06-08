@@ -112,18 +112,19 @@ export function renderTickets() {
   renderPagination('tickets-pagination', st, 'loadTickets');
 }
 export async function openTicketForm(id) {
+  openDrawer('drawer-ticket');
   await ensureAllCustomers();
   await ensureProducts();
   await populateCustomerDropdown('ticket-customer-select', false);
   const prodSel = document.getElementById('ticket-product-select');
   prodSel.innerHTML = '<option value="">-- Không chọn --</option>' +
     state.products.map(p => `<option value="${p.id}">${escapeHtml(p.code)} - ${escapeHtml(p.name)}</option>`).join('');
-  
+
   // Phase 4C: populate dropdown KTV
-  await populateAssignedToDropdown('ticket-assigned-select', { 
-    emptyLabel: 'Chưa giao (KTV nào trong phòng cũng nhận được)' 
+  await populateAssignedToDropdown('ticket-assigned-select', {
+    emptyLabel: 'Chưa giao (KTV nào trong phòng cũng nhận được)'
   });
-  
+
   const form = document.getElementById('form-ticket');
   form.reset();
   state.currentEditing = null;
@@ -154,7 +155,6 @@ export async function openTicketForm(id) {
     const creatorField = document.getElementById('ticket-creator-field');
     if (creatorField) creatorField.style.display = 'none';
   }
-  openDrawer('drawer-ticket');
 }
 document.getElementById('form-ticket').addEventListener('submit', async (e) => {
   e.preventDefault();

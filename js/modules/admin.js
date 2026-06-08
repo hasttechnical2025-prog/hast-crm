@@ -96,6 +96,7 @@ export function renderUsers() {
   renderPagination('users-pagination', st, 'loadUsers');
 }
 export async function openUserForm(id) {
+  openDrawer('drawer-user');
   if (state.depts.items.length === 0) await loadDepartments(true);
   const deptSel = document.getElementById('user-dept-select');
   deptSel.innerHTML = '<option value="">-- Không chọn --</option>' +
@@ -130,7 +131,6 @@ export async function openUserForm(id) {
     resetBtn.style.display = 'none';
     document.getElementById('drawer-user-title').textContent = 'Thêm người dùng';
   }
-  openDrawer('drawer-user');
 }
 document.getElementById('form-user').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -204,6 +204,7 @@ export function renderDepartments() {
   lucide.createIcons();
 }
 export function openDepartmentForm(id) {
+  openDrawer('drawer-department');
   const form = document.getElementById('form-department');
   form.reset();
   state.currentEditing = null;
@@ -217,7 +218,6 @@ export function openDepartmentForm(id) {
   } else {
     document.getElementById('drawer-dept-title').textContent = 'Thêm phòng ban';
   }
-  openDrawer('drawer-department');
 }
 document.getElementById('form-department').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -293,6 +293,7 @@ export function renderAdminProducts() {
   renderPagination('products-pagination', st, 'loadAdminProducts');
 }
 export function openProductForm(id) {
+  openDrawer('drawer-product');
   const form = document.getElementById('form-product');
   form.reset();
   state.currentEditing = null;
@@ -312,7 +313,6 @@ export function openProductForm(id) {
   } else {
     document.getElementById('drawer-product-title').textContent = 'Thêm sản phẩm';
   }
-  openDrawer('drawer-product');
 }
 document.getElementById('form-product').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -385,6 +385,7 @@ export function renderTags() {
   lucide.createIcons();
 }
 export function openTagForm(id) {
+  openDrawer('drawer-tag');
   const form = document.getElementById('form-tag');
   form.reset();
   form.elements.color.value = '#1976d2';
@@ -400,7 +401,6 @@ export function openTagForm(id) {
   } else {
     document.getElementById('drawer-tag-title').textContent = 'Thêm thẻ';
   }
-  openDrawer('drawer-tag');
 }
 document.getElementById('form-tag').addEventListener('submit', async (e) => {
   e.preventDefault();

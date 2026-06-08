@@ -129,7 +129,7 @@ export function renderOpps() {
   renderPagination('opps-pagination', st, 'loadOpps');
 }
 export async function openOpportunityForm(id) {
-
+  openDrawer('drawer-opportunity');
   try {
     await populateCustomerDropdown('opp-customer-select', false);
     const form = document.getElementById('form-opportunity');
@@ -148,7 +148,6 @@ export async function openOpportunityForm(id) {
     } else {
       document.getElementById('drawer-opp-title').textContent = 'Tạo cơ hội';
     }
-    openDrawer('drawer-opportunity');
   } finally {
     hideLoading();
   }
@@ -388,16 +387,32 @@ document.getElementById('orders-filter-payment').addEventListener('change', e =>
 
 // ====== SALES DOC (Quote/Order chia sẻ form với dynamic line items) ======
 export async function openSalesDocForm(mode, id) {
-
+  openDrawer('drawer-sales-doc');
   try {
     state.salesDocMode = mode;
     state.currentEditing = null;
-    await ensureAllCustomers();
-    await ensureProducts();
-    await populateCustomerDropdown('sd-customer-select', false);
 
     const form = document.getElementById('form-sales-doc');
     form.reset();
+
+    // Show/hide fields theo mode
+    const isQuote = mode === 'quote';
+    document.getElementById('sd-field-issuedate').style.display = isQuote ? '' : 'none';
+    document.getElementById('sd-field-validuntil').style.display = isQuote ? '' : 'none';
+    document.getElementById('sd-field-deliveryterms').style.display = isQuote ? '' : 'none';
+    document.getElementById('sd-field-orderdate').style.display = isQuote ? 'none' : '';
+    document.getElementById('sd-field-deliverydate').style.display = isQuote ? 'none' : '';
+    document.getElementById('sd-field-shippingaddress').style.display = isQuote ? 'none' : '';
+    document.getElementById('sd-field-shippingfee').style.display = isQuote ? 'none' : '';
+    document.getElementById('tot-shipping-row').style.display = isQuote ? 'none' : '';
+    document.getElementById('sd-submit-btn').textContent = isQuote ? (id ? 'Cập nhật báo giá' : 'Lưu báo giá') : (id ? 'Cập nhật đơn hàng' : 'Lưu đơn hàng');
+
+    // Clear line items
+    document.getElementById('line-items-tbody').innerHTML = '';
+
+    await ensureAllCustomers();
+    await ensureProducts();
+    await populateCustomerDropdown('sd-customer-select', false);
 
     // Lắng nghe thay đổi khách hàng để tự động điền địa chỉ giao hàng
     const custSel = document.getElementById('sd-customer-select');
@@ -420,21 +435,6 @@ export async function openSalesDocForm(mode, id) {
         }
       });
     }
-
-    // Show/hide fields theo mode
-    const isQuote = mode === 'quote';
-    document.getElementById('sd-field-issuedate').style.display = isQuote ? '' : 'none';
-    document.getElementById('sd-field-validuntil').style.display = isQuote ? '' : 'none';
-    document.getElementById('sd-field-deliveryterms').style.display = isQuote ? '' : 'none';
-    document.getElementById('sd-field-orderdate').style.display = isQuote ? 'none' : '';
-    document.getElementById('sd-field-deliverydate').style.display = isQuote ? 'none' : '';
-    document.getElementById('sd-field-shippingaddress').style.display = isQuote ? 'none' : '';
-    document.getElementById('sd-field-shippingfee').style.display = isQuote ? 'none' : '';
-    document.getElementById('tot-shipping-row').style.display = isQuote ? 'none' : '';
-    document.getElementById('sd-submit-btn').textContent = isQuote ? (id ? 'Cập nhật báo giá' : 'Lưu báo giá') : (id ? 'Cập nhật đơn hàng' : 'Lưu đơn hàng');
-
-    // Clear line items
-    document.getElementById('line-items-tbody').innerHTML = '';
 
     if (id) {
       // Edit mode: load chi tiết
@@ -461,7 +461,6 @@ export async function openSalesDocForm(mode, id) {
     }
 
     recalcTotals();
-    openDrawer('drawer-sales-doc');
   } finally {
     hideLoading();
   }

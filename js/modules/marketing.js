@@ -101,6 +101,7 @@ export function renderCampaigns() {
   renderPagination('campaigns-pagination', st, 'loadCampaigns');
 }
 export async function openCampaignForm(id) {
+  openDrawer('drawer-campaign');
   await ensureAllCustomers();
   // Populate multi-select khách hàng
   const sel = document.getElementById('campaign-customers-select');
@@ -137,7 +138,6 @@ export async function openCampaignForm(id) {
     document.getElementById('drawer-campaign-title').textContent = 'Tạo chiến dịch';
     document.getElementById('campaign-customers-count').textContent = '0';
   }
-  openDrawer('drawer-campaign');
 }
 document.getElementById('form-campaign').addEventListener('submit', async (e) => {
   e.preventDefault();

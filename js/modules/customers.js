@@ -456,31 +456,11 @@ export async function setupProvinceWardDropdowns(selectedProvince, selectedWard)
 }
 
 export async function openCustomerForm(id) {
-
+  openDrawer('drawer-customer');
   try {
     const form = document.getElementById('form-customer');
     form.reset();
     state.currentEditing = null;
-
-    await ensureDepartments();
-
-    const visSel = document.getElementById('customer-visibility-select');
-    if (visSel) {
-      const role = state.user?.role || 'staff';
-      const allOptions = [
-        { value: 'private', label: 'Riêng tôi (chỉ tôi và người tôi gán)', roles: ['admin','manager','staff','boss'] },
-        { value: 'department', label: 'Phòng ban tôi (mọi người trong phòng KD/KT/KTHC đều thấy)', roles: ['admin','manager'] },
-        { value: 'public', label: 'Toàn công ty (tất cả nhân viên đều thấy)', roles: ['admin'] },
-      ];
-      visSel.innerHTML = allOptions
-        .filter(o => o.roles.includes(role))
-        .map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`)
-        .join('');
-      if (role === 'staff') visSel.value = 'private';
-      else visSel.value = 'department';
-    }
-
-    await populateAssignedToDropdown('customer-assigned-select');
 
     let defaultProvince = 'Thành phố Hà Nội';
     let defaultWard = '';
@@ -503,8 +483,26 @@ export async function openCustomerForm(id) {
       document.getElementById('drawer-customer-sub').textContent = '';
     }
 
+    await ensureDepartments();
+
+    const visSel = document.getElementById('customer-visibility-select');
+    if (visSel) {
+      const role = state.user?.role || 'staff';
+      const allOptions = [
+        { value: 'private', label: 'Riêng tôi (chỉ tôi và người tôi gán)', roles: ['admin','manager','staff','boss'] },
+        { value: 'department', label: 'Phòng ban tôi (mọi người trong phòng KD/KT/KTHC đều thấy)', roles: ['admin','manager'] },
+        { value: 'public', label: 'Toàn công ty (tất cả nhân viên đều thấy)', roles: ['admin'] },
+      ];
+      visSel.innerHTML = allOptions
+        .filter(o => o.roles.includes(role))
+        .map(o => `<option value="${o.value}">${escapeHtml(o.label)}</option>`)
+        .join('');
+      if (role === 'staff') visSel.value = 'private';
+      else visSel.value = 'department';
+    }
+
+    await populateAssignedToDropdown('customer-assigned-select');
     await setupProvinceWardDropdowns(defaultProvince, defaultWard);
-    openDrawer('drawer-customer');
   } finally {
     hideLoading();
   }
@@ -780,7 +778,7 @@ export async function populateCustomerDropdown(selectId, includeEmpty) {
 }
 
 export async function openContactForm(id) {
-
+  openDrawer('drawer-contact');
   try {
     await populateCustomerDropdown('contact-customer-select', false);
     const form = document.getElementById('form-contact');
@@ -800,7 +798,6 @@ export async function openContactForm(id) {
     } else {
       document.getElementById('drawer-contact-title').textContent = 'Thêm liên hệ';
     }
-    openDrawer('drawer-contact');
   } finally {
     hideLoading();
   }
@@ -932,7 +929,7 @@ export function calculateActivityDuration() {
 }
 
 export async function openActivityForm(id) {
-
+  openDrawer('drawer-activity');
   try {
     const form = document.getElementById('form-activity');
     form.reset();
@@ -958,7 +955,6 @@ export async function openActivityForm(id) {
 
     await populateRelatedIdDropdown('activity-related-type', 'activity-related-id', defaultRelatedType, defaultRelatedId);
     calculateActivityDuration();
-    openDrawer('drawer-activity');
   } finally {
     hideLoading();
   }

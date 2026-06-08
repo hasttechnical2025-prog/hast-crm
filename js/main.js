@@ -215,6 +215,12 @@ async function showApp() {
   await loadAppSettings(); // Load logo, VAT, company name từ Settings
   applyRoleVisibility();   // Ẩn nút theo quyền
 
+  // Tải trước dữ liệu (Pre-fetching) ngầm dưới nền để tránh giật lag khi mở form
+  if (typeof window.ensureAllUsers === 'function') window.ensureAllUsers().catch(() => {});
+  if (typeof window.ensureDepartments === 'function') window.ensureDepartments().catch(() => {});
+  if (typeof window.ensureProducts === 'function') window.ensureProducts().catch(() => {});
+  if (typeof window.setupProvinceWardDropdowns === 'function') window.setupProvinceWardDropdowns().catch(() => {});
+
   // Khởi tạo Custom Columns cho tất cả các tab
   initColumnCustomizer('customers', 'customers-table-wrap', 'col-cust-dropdown', 'col-cust-container', CUSTOMERS_COLUMNS);
   initColumnCustomizer('contacts', 'contacts-table-wrap', 'col-cust-dropdown-contacts', 'col-cust-container-contacts', CONTACTS_COLUMNS);
