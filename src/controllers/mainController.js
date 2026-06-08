@@ -1,3 +1,4 @@
+const { supabase } = require('../config');
 const { authenticateRequest, handleError } = require('../middlewares/auth');
 
 const { authLogin, authLogout, authMe, authChangePassword, authAdminResetPassword, authUpdateProfile } = require('./authController');
@@ -21,6 +22,41 @@ async function handleRequest(req, res) {
     if (action === 'auth.login') {
       const data = await authLogin(payload, req.ip);
       return res.json({ success: true, data, message: 'Đăng nhập thành công' });
+    }
+
+    // Lấy thông tin công khai của công ty (dùng cho trang đăng nhập khi chưa có token)
+    if (action === 'company.getPublicInfo') {
+      const { data } = await supabase
+        .from('crm_settings')
+        .select('*')
+        .like('key', 'company.%');
+      const settings = {};
+      if (data) {
+        data.forEach(r => { settings[r.key] = r.value; });
+      }
+
+      // Tự động gán mặc định nếu thiếu trong DB để Admin có thể thấy và chỉnh sửa trên UI
+      const defaults = {
+        'company.loginHeadline': 'Quản trị quan hệ <em>khách hàng</em><br>một cách <em>tinh tế</em>.',
+        'company.loginTagline': 'Hệ thống CRM nội bộ dành cho đội ngũ Kinh doanh, Kỹ thuật và Kế toán của Công ty Cổ phần Siêu Thanh Hà Nội — đối tác chính hãng của Konica Minolta, Fuji Xerox, Kyocera và Epson tại Việt Nam.',
+        'company.loginFooter': '© 2026 Siêu Thanh Hà Nội'
+      };
+
+      let needsUpsert = false;
+      const upsertRows = [];
+      for (const [k, v] of Object.entries(defaults)) {
+        if (!settings[k]) {
+          settings[k] = v;
+          upsertRows.push({ key: k, value: v });
+          needsUpsert = true;
+        }
+      }
+
+      if (needsUpsert) {
+        supabase.from('crm_settings').upsert(upsertRows).then(() => {}).catch(() => {});
+      }
+
+      return res.json({ success: true, data: settings });
     }
 
     const currentUser = await authenticateRequest(token);

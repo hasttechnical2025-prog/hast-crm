@@ -558,12 +558,45 @@ window.openSalesDocForm = async function(mode, id) {
   if (id) setTimeout(addExportButtonsToSalesDoc, 100);
 };
 
+async function loadPublicCompanyInfo() {
+  try {
+    // API công khai không cần token
+    const res = await api('company.getPublicInfo');
+    if (res['company.loginHeadline']) {
+      const headline = document.querySelector('.login-headline');
+      if (headline) headline.innerHTML = res['company.loginHeadline'];
+    }
+    if (res['company.loginTagline']) {
+      const tagline = document.querySelector('.login-tagline');
+      if (tagline) tagline.innerHTML = res['company.loginTagline'];
+    }
+    if (res['company.loginFooter']) {
+      const footerSpan = document.querySelector('.login-footer span:first-child');
+      if (footerSpan) footerSpan.innerHTML = res['company.loginFooter'];
+    }
+    if (res['company.logoUrl']) {
+      const logos = document.querySelectorAll('.login-brand-logo, .topbar-brand-logo');
+      const url = resolveLogoUrl(res['company.logoUrl']);
+      logos.forEach(logo => {
+        logo.innerHTML = `<img src="${url}" alt="Logo" style="width:100%;height:100%;object-fit:contain;border-radius:inherit;" />`;
+        logo.style.background = 'transparent';
+        logo.style.padding = '0';
+      });
+    }
+  } catch (err) {
+    console.warn('Lỗi tải thông tin công ty công khai:', err.message);
+  }
+}
+
 // ============================================================
 // INIT - kiểm tra session khi tải trang
 // ============================================================
 (async function init() {
   // Render icons trước
   lucide.createIcons();
+
+  // Tải trước cấu hình giao diện đăng nhập từ backend
+  await loadPublicCompanyInfo();
 
   const sess = loadSession();
   if (sess && sess.token) {
