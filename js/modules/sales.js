@@ -399,6 +399,28 @@ export async function openSalesDocForm(mode, id) {
     const form = document.getElementById('form-sales-doc');
     form.reset();
 
+    // Lắng nghe thay đổi khách hàng để tự động điền địa chỉ giao hàng
+    const custSel = document.getElementById('sd-customer-select');
+    if (custSel) {
+      // Clone để tránh lặp event listener khi mở form nhiều lần
+      const newCustSel = custSel.cloneNode(true);
+      custSel.parentNode.replaceChild(newCustSel, custSel);
+      newCustSel.addEventListener('change', () => {
+        if (state.salesDocMode !== 'order') return;
+        const customerId = newCustSel.value;
+        if (!customerId) return;
+        const c = state.allCustomers.find(x => x.id === customerId);
+        if (c) {
+          const addressInput = form.elements.shippingAddress;
+          // Tự động điền nếu đang tạo mới hoặc ô địa chỉ giao hàng trống
+          if (addressInput && (!state.currentEditing || !addressInput.value.trim())) {
+            const fullAddress = [c.address, c.district, c.province].filter(Boolean).join(', ');
+            addressInput.value = fullAddress || '';
+          }
+        }
+      });
+    }
+
     // Show/hide fields theo mode
     const isQuote = mode === 'quote';
     document.getElementById('sd-field-issuedate').style.display = isQuote ? '' : 'none';
