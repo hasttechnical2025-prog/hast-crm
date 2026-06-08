@@ -9,6 +9,27 @@ export const state = {
   currentTab: 'dashboard',
   dashboard: null,
   charts: {},
+  // TABS STATE
+  customers: { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  contacts:  { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  activities:{ items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  opps:      { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  quotes:    { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  orders:    { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  tickets:   { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  campaigns: { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  notes:     { items: [], page: 1, pageSize: 30, total: 0, search: '', filters: {} },
+  messages:  { items: [], page: 1, pageSize: 30, total: 0, search: '', filters: {} },
+  users:     { items: [], page: 1, pageSize: 50, total: 0, search: '', filters: {} },
+  adminProds:{ items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} },
+  depts:     { items: [] },
+  tags:      { items: [] },
+  settings:  {},
+  // CACHES
+  products: [],
+  allCustomers: [],
+  currentEditing: null,
+  salesDocMode: 'quote'
 };
 
 // ============================================================

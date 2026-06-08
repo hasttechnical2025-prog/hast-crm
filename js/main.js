@@ -119,7 +119,7 @@ document.querySelectorAll('.modal-backdrop').forEach(b => {
 });
 
 // ============================================================
-// NAVIGATION (TABS)
+// NAVIGATION (TABS) & AUTO-LOAD
 // ============================================================
 document.querySelectorAll('.tab').forEach(t => {
   t.addEventListener('click', () => {
@@ -127,16 +127,38 @@ document.querySelectorAll('.tab').forEach(t => {
     document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x.dataset.tab === target));
     document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.dataset.panel === target));
     state.currentTab = target;
+
+    if (target === 'customers' && state.customers.items.length === 0) window.loadCustomers();
+    else if (target === 'contacts' && state.contacts.items.length === 0) window.loadContacts();
+    else if (target === 'activities' && state.activities.items.length === 0) window.loadActivities();
+    else if (target === 'sales' && state.opps.items.length === 0) window.loadOpps();
+    else if (target === 'support' && state.tickets.items.length === 0) window.loadTickets();
+    else if (target === 'marketing' && state.campaigns.items.length === 0) window.loadCampaigns();
+    else if (target === 'notes' && state.notes.items.length === 0) window.loadNotes();
+    else if (target === 'messages' && state.messages.items.length === 0) window.loadMessages();
+    else if (target === 'admin' && state.users.items.length === 0) window.loadUsers();
+    else if (target === 'workflow') window.loadWorkflows();  // Phase 4B
   });
 });
 
 // ============================================================
-// QUICK ACTIONS (placeholder cho Phase 3B/3C)
+// QUICK ACTIONS - kết nối vào form
 // ============================================================
+document.querySelectorAll('.quick-action').forEach(b => {
+  // override listener cũ
+  b.replaceWith(b.cloneNode(true));
+});
 document.querySelectorAll('.quick-action').forEach(b => {
   b.addEventListener('click', () => {
     const type = b.dataset.quick;
-    toast(`Chức năng "${b.textContent.trim()}" sẽ có ở Phase 3B/3C`, 'info');
+    switch(type) {
+      case 'customer': window.openCustomerForm(); break;
+      case 'contact':  window.openContactForm(); break;
+      case 'opportunity': window.openOpportunityForm(); break;
+      case 'quote': window.openQuoteForm(); break;
+      case 'order': window.openOrderForm(); break;
+      case 'activity': window.openActivityForm(); break;
+    }
   });
 });
 

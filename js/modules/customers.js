@@ -31,16 +31,7 @@ import {
 // ============================================================
 
 // ====== STATE phase 3B ======
-state.customers = { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.contacts  = { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.activities= { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.opps      = { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.quotes    = { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.orders    = { items: [], page: 1, pageSize: 20, total: 0, search: '', filters: {} };
-state.products  = [];     // cache toàn bộ products
-state.allCustomers = [];  // cache cho dropdown
-state.currentEditing = null;   // record đang edit
-state.salesDocMode = 'quote';  // hoặc 'order'
+// Centralized in js/state.js
 
 // ====== DRAWER UTILS ======
 export function openDrawer(id) {
