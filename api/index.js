@@ -18,6 +18,19 @@ app.use(morgan('dev'));
 app.post('/api', handleRequest);
 app.get('/api/export', handleExport);
 
+// Serve static files in local development
+if (process.env.NODE_ENV !== 'production') {
+  const path = require('path');
+  app.use('/css', express.static(path.join(__dirname, '../css')));
+  app.use('/js', express.static(path.join(__dirname, '../js')));
+  app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, '../index.html'));
+  });
+  app.get('/logo.png', (req, res) => {
+    res.sendFile(path.join(__dirname, '../logo.png'));
+  });
+}
+
 // Khởi chạy server local
 if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
