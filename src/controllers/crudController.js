@@ -115,9 +115,19 @@ async function crudList(tableName, user, params) {
   const sortOrder = params.sortOrder === 'asc' ? 'asc' : 'desc';
   const search = params.search ? String(params.search).trim() : '';
 
+  let selectQuery = '*';
+  const hasAssignedCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers'].includes(tableName);
+  const hasCreatedByCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers', 'crm_contacts', 'crm_notes', 'crm_messages'].includes(tableName);
+
+  if (hasAssignedCol && hasCreatedByCol) {
+    selectQuery = '*, creator:crm_users!created_by(id, full_name), assignee:crm_users!assigned_to(id, full_name)';
+  } else if (hasCreatedByCol) {
+    selectQuery = '*, creator:crm_users!created_by(id, full_name)';
+  }
+
   let query = supabase
     .from(tableName)
-    .select('*', { count: 'exact' })
+    .select(selectQuery, { count: 'exact' })
     .eq('is_deleted', false);
 
   const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities'].includes(tableName);
@@ -179,9 +189,19 @@ async function crudGet(tableName, user, id) {
     throw error;
   }
 
+  let selectQuery = '*';
+  const hasAssignedCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers'].includes(tableName);
+  const hasCreatedByCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers', 'crm_contacts', 'crm_notes', 'crm_messages'].includes(tableName);
+
+  if (hasAssignedCol && hasCreatedByCol) {
+    selectQuery = '*, creator:crm_users!created_by(id, full_name), assignee:crm_users!assigned_to(id, full_name)';
+  } else if (hasCreatedByCol) {
+    selectQuery = '*, creator:crm_users!created_by(id, full_name)';
+  }
+
   const { data, error } = await supabase
     .from(tableName)
-    .select('*')
+    .select(selectQuery)
     .eq('id', id)
     .eq('is_deleted', false)
     .single();
