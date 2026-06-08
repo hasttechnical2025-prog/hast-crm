@@ -34,13 +34,13 @@ document.querySelectorAll('.admin-subtab').forEach(t => {
     const target = t.dataset.subtab;
     document.querySelectorAll('.admin-subtab').forEach(x => x.classList.toggle('active', x.dataset.subtab === target));
     document.querySelectorAll('.admin-subpanel').forEach(p => p.classList.toggle('active', p.dataset.subpanel === target));
-    // Lazy load
-    if (target === 'users' && state.users.items.length === 0) loadUsers();
-    else if (target === 'departments' && state.depts.items.length === 0) loadDepartments();
-    else if (target === 'products' && state.adminProds.items.length === 0) loadAdminProducts();
-    else if (target === 'tags' && state.tags.items.length === 0) loadTags();
-    else if (target === 'settings' && Object.keys(state.settings).length === 0) loadSettings();
-    else if (target === 'permissions') loadPermissionsMatrix(); // Phase 4D: load mỗi lần để có data mới nhất
+    // Luôn tải lại để đảm bảo dữ liệu mới nhất
+    if (target === 'users') loadUsers();
+    else if (target === 'departments') loadDepartments();
+    else if (target === 'products') loadAdminProducts();
+    else if (target === 'tags') loadTags();
+    else if (target === 'settings') loadSettings();
+    else if (target === 'permissions') loadPermissionsMatrix();
   });
 });
 

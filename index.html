@@ -957,7 +957,10 @@
                 <option value="manager">Trưởng phòng</option>
                 <option value="staff">Nhân viên</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openUserForm()" style="margin-left:auto"><i data-lucide="plus" style="width:14px;height:14px"></i> Thêm người dùng</button>
+              <button class="btn btn-outline btn-sm" onclick="exportUsersExcel()" style="margin-left:auto"><i data-lucide="download" style="width:14px;height:14px"></i> Xuất Excel</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-users-file').click()"><i data-lucide="upload" style="width:14px;height:14px"></i> Nhập từ Excel</button>
+              <input type="file" id="import-users-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importUsersExcel(this)" />
+              <button class="btn btn-primary btn-sm" onclick="openUserForm()"><i data-lucide="plus" style="width:14px;height:14px"></i> Thêm người dùng</button>
             </div>
             <div class="table-wrap">
               <table class="data-table">
@@ -976,6 +979,9 @@
           <div class="card" style="padding:0">
             <div class="toolbar">
               <div style="flex:1;font-size:13px;color:var(--ink-3)">Quản lý các phòng ban trong công ty</div>
+              <button class="btn btn-outline btn-sm" onclick="exportDepartmentsExcel()"><i data-lucide="download" style="width:14px;height:14px"></i> Xuất Excel</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-departments-file').click()"><i data-lucide="upload" style="width:14px;height:14px"></i> Nhập từ Excel</button>
+              <input type="file" id="import-departments-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importDepartmentsExcel(this)" />
               <button class="btn btn-primary btn-sm" onclick="openDepartmentForm()"><i data-lucide="plus" style="width:14px;height:14px"></i> Thêm phòng ban</button>
             </div>
             <div class="table-wrap">
@@ -1012,7 +1018,10 @@
                 <option value="Vật tư tiêu hao">Vật tư tiêu hao</option>
                 <option value="Dịch vụ CPC">Dịch vụ CPC</option>
               </select>
-              <button class="btn btn-primary btn-sm" onclick="openProductForm()" style="margin-left:auto"><i data-lucide="plus" style="width:14px;height:14px"></i> Thêm sản phẩm</button>
+              <button class="btn btn-outline btn-sm" onclick="exportProductsExcel()" style="margin-left:auto"><i data-lucide="download" style="width:14px;height:14px"></i> Xuất Excel</button>
+              <button class="btn btn-outline btn-sm" onclick="document.getElementById('import-products-file').click()"><i data-lucide="upload" style="width:14px;height:14px"></i> Nhập từ Excel</button>
+              <input type="file" id="import-products-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="importProductsExcel(this)" />
+              <button class="btn btn-primary btn-sm" onclick="openProductForm()"><i data-lucide="plus" style="width:14px;height:14px"></i> Thêm sản phẩm</button>
             </div>
             <div class="table-wrap">
               <table class="data-table">
