@@ -120,7 +120,7 @@ async function crudList(tableName, user, params) {
     .select('*', { count: 'exact' })
     .eq('is_deleted', false);
 
-  const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders'].includes(tableName);
+  const hasDeptField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities'].includes(tableName);
   const hasAssignedField = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_support_tickets', 'crm_activities', 'crm_customers'].includes(tableName);
 
   const filterResult = await applyPermissionFilter(query, user, hasDeptField, hasAssignedField, tableName);
@@ -221,14 +221,25 @@ async function crudGet(tableName, user, id) {
       const isSameDept = creatorDeptId === user.department_id;
       const isDeptVisible = data.visibility === 'department' && isSameDept;
 
+      let hasImplicitAccess = false;
+      if (!isCreator && !isAssigned && !isPublic) {
+        // Cấp quyền đọc ẩn (Implicit Access) nếu người dùng được giao một Ticket hoặc Activity thuộc KH này
+        const { count: tCount } = await supabase.from('crm_support_tickets').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).eq('assigned_to', user.id).eq('is_deleted', false);
+        if (tCount && tCount > 0) hasImplicitAccess = true;
+        else {
+          const { count: aCount } = await supabase.from('crm_activities').select('id', { count: 'exact', head: true }).eq('customer_id', data.id).eq('assigned_to', user.id).eq('is_deleted', false);
+          if (aCount && aCount > 0) hasImplicitAccess = true;
+        }
+      }
+
       if (user.role === 'manager') {
-        if (!isCreator && !isAssigned && !isPublic && !isSameDept) {
+        if (!isCreator && !isAssigned && !isPublic && !isSameDept && !hasImplicitAccess) {
           const err = new Error('FORBIDDEN: Bạn không có quyền truy cập khách hàng này');
           err.code = 'FORBIDDEN';
           throw err;
         }
       } else if (user.role === 'staff') {
-        if (!isCreator && !isAssigned && !isPublic && !isDeptVisible) {
+        if (!isCreator && !isAssigned && !isPublic && !isDeptVisible && !hasImplicitAccess) {
           const err = new Error('FORBIDDEN: Bạn không có quyền truy cập khách hàng này');
           err.code = 'FORBIDDEN';
           throw err;
