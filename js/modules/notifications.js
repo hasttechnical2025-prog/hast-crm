@@ -173,7 +173,7 @@ export async function loadNotifications() {
       document.getElementById('notif-badge').style.display = 'none';
     } else {
       body.innerHTML = notifications.map((n, i) => `
-        <div class="notif-item ${n.unread ? 'unread' : ''}" onclick="window._notifClick(${i})">
+        <div class="notif-item ${n.unread ? 'unread' : ''}" onclick="window._notifClick(${i}, this)">
           <div class="notif-icon ${n.cls||''}"><i data-lucide="${n.icon}" style="width:16px;height:16px"></i></div>
           <div class="notif-content">
             <div class="notif-title">${escapeHtml(n.title)}</div>
@@ -182,13 +182,27 @@ export async function loadNotifications() {
           ${n.unread ? '<div class="notif-dot"></div>' : ''}
         </div>
       `).join('');
-      window._notifClick = async (i) => {
+      window._notifClick = async (i, el) => {
         const notif = notifications[i];
         // Đánh dấu read nếu là notification từ backend
         if (notif.id && notif.unread) {
           try {
             await api('notification.markRead', { id: notif.id });
-            updateNotifBadge();
+            notif.unread = false;
+            if (el) {
+              el.classList.remove('unread');
+              const dot = el.querySelector('.notif-dot');
+              if (dot) dot.remove();
+            }
+            // Giảm số lượng đếm trên badge ngay lập tức
+            const badge = document.getElementById('notif-badge');
+            if (badge && badge.style.display !== 'none') {
+              let currentCount = parseInt(badge.textContent, 10);
+              if (badge.textContent === '99+') currentCount = 100; // fallback gần đúng
+              if (!isNaN(currentCount)) {
+                updateNotifBadge(Math.max(0, currentCount - 1));
+              }
+            }
           } catch (e) {}
         }
         if (notif.onClick) notif.onClick();
