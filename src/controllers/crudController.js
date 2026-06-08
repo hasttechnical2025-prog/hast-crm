@@ -513,6 +513,8 @@ async function userCreate(currentUser, payload) {
   const salt = generateSalt();
   const hash = hashPassword(payload.password, salt);
 
+  delete snakePayload.password;
+
   snakePayload.id = require('crypto').randomUUID();
   snakePayload.salt = salt;
   snakePayload.password_hash = hash;
