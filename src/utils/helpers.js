@@ -9,7 +9,11 @@ function snakeToCamel(obj) {
       camelObj[key] = obj[key];
       continue;
     }
-    const camelKey = key.replace(/(_\w)/g, m => m[1].toUpperCase());
+    let camelKey = key.replace(/(_\w)/g, m => m[1].toUpperCase());
+
+    // Khớp lại tên viết tắt viết hoa (Acronym) cho phía Frontend
+    if (camelKey === 'isForCpc') camelKey = 'isForCPC';
+
     camelObj[camelKey] = snakeToCamel(obj[key]);
   }
   return camelObj;
@@ -26,7 +30,12 @@ function camelToSnake(obj) {
       snakeObj[key] = obj[key];
       continue;
     }
-    const snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
+    let snakeKey = key.replace(/([A-Z])/g, "_$1").toLowerCase();
+
+    // Fix known acronym mappings that regex splits incorrectly
+    if (snakeKey === 'is_for_c_p_c') snakeKey = 'is_for_cpc';
+    if (snakeKey.includes('c_p_c')) snakeKey = snakeKey.replace(/c_p_c/g, 'cpc');
+
     snakeObj[snakeKey] = camelToSnake(obj[key]);
   }
   return snakeObj;
