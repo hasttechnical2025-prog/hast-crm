@@ -23,8 +23,21 @@ import {
   setCustomInputValue,
   getCustomInputValue,
   extractFormData,
-  timeAgo
+  timeAgo,
+  syncColumnVisibility
 } from '../utils.js';
+
+export const TICKETS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'subject', label: 'Tiêu đề', required: true },
+  { key: 'customer', label: 'Khách hàng' },
+  { key: 'category', label: 'Danh mục' },
+  { key: 'priority', label: 'Ưu tiên' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'assignee', label: 'KTV phụ trách' },
+  { key: 'createdAt', label: 'Mở lúc' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
 
 // =============================================================
 // TAB 6: TICKETS (Hỗ trợ kỹ thuật)
@@ -65,23 +78,23 @@ export function renderTickets() {
   }
   const custMap = {}; state.allCustomers.forEach(c => { custMap[c.id] = c; });
   const userMap = {}; (state.allUsers || []).forEach(u => { userMap[u.id] = u; });
-  
+
   tbody.innerHTML = st.items.map(t => {
     const assignee = t.assignedTo ? userMap[t.assignedTo] : null;
-    const assigneeLabel = assignee ? (assignee.fullName || assignee.username) : 
-                          (t.assignedTo ? '<span class="text-muted">(Không rõ)</span>' : 
+    const assigneeLabel = assignee ? (assignee.fullName || assignee.username) :
+                          (t.assignedTo ? '<span class="text-muted">(Không rõ)</span>' :
                                           '<span class="text-muted" style="font-style:italic">Chưa giao</span>');
     return `
       <tr onclick="openTicketForm('${t.id}')">
-        <td><span class="code">${escapeHtml(t.code||'')}</span></td>
-        <td><strong>${escapeHtml(t.subject||'')}</strong></td>
-        <td>${custMap[t.customerId] ? escapeHtml(custMap[t.customerId].name) : '-'}</td>
-        <td>${escapeHtml(t.category||'-')}</td>
-        <td>${priorityBadge(t.priority)}</td>
-        <td>${ticketStatusBadge(t.status)}</td>
-        <td>${assigneeLabel}</td>
-        <td>${formatDateTimeVN(t.openedAt)}</td>
-        <td class="col-actions" onclick="event.stopPropagation()">
+        <td data-col="code"><span class="code">${escapeHtml(t.code||'')}</span></td>
+        <td data-col="subject"><strong>${escapeHtml(t.subject||'')}</strong></td>
+        <td data-col="customer">${custMap[t.customerId] ? escapeHtml(custMap[t.customerId].name) : '-'}</td>
+        <td data-col="category">${escapeHtml(t.category||'-')}</td>
+        <td data-col="priority">${priorityBadge(t.priority)}</td>
+        <td data-col="status">${ticketStatusBadge(t.status)}</td>
+        <td data-col="assignee">${assigneeLabel}</td>
+        <td data-col="createdAt">${formatDateTimeVN(t.openedAt)}</td>
+        <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
           <div class="row-actions">
             <button class="row-action-btn" onclick="openTicketForm('${t.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
             <button class="row-action-btn danger" onclick="deleteTicket('${t.id}')"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
@@ -91,6 +104,7 @@ export function renderTickets() {
     `;
   }).join('');
   lucide.createIcons();
+  syncColumnVisibility('tickets', 'tickets-table-wrap', TICKETS_COLUMNS);
   renderPagination('tickets-pagination', st, 'loadTickets');
 }
 export async function openTicketForm(id) {

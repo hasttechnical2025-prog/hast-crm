@@ -19,10 +19,10 @@ import {
 // Import modules to ensure they register or run
 import './modules/dashboard.js';
 import './modules/notifications.js';
-import { CUSTOMERS_COLUMNS } from './modules/customers.js';
-import './modules/sales.js';
-import './modules/tickets.js';
-import './modules/marketing.js';
+import { CUSTOMERS_COLUMNS, CONTACTS_COLUMNS, ACTIVITIES_COLUMNS } from './modules/customers.js';
+import { OPPS_COLUMNS, QUOTES_COLUMNS, ORDERS_COLUMNS } from './modules/sales.js';
+import { TICKETS_COLUMNS } from './modules/tickets.js';
+import { CAMPAIGNS_COLUMNS } from './modules/marketing.js';
 import './modules/admin.js';
 import './modules/kanban.js';
 import './modules/export.js';
@@ -215,8 +215,15 @@ async function showApp() {
   await loadAppSettings(); // Load logo, VAT, company name từ Settings
   applyRoleVisibility();   // Ẩn nút theo quyền
 
-  // Khởi tạo Custom Columns cho tab Khách hàng
+  // Khởi tạo Custom Columns cho tất cả các tab
   initColumnCustomizer('customers', 'customers-table-wrap', 'col-cust-dropdown', 'col-cust-container', CUSTOMERS_COLUMNS);
+  initColumnCustomizer('contacts', 'contacts-table-wrap', 'col-cust-dropdown-contacts', 'col-cust-container-contacts', CONTACTS_COLUMNS);
+  initColumnCustomizer('activities', 'activities-table-wrap', 'col-cust-dropdown-activities', 'col-cust-container-activities', ACTIVITIES_COLUMNS);
+  initColumnCustomizer('opps', 'opps-table-wrap', 'col-cust-dropdown-opps', 'col-cust-container-opps', OPPS_COLUMNS);
+  initColumnCustomizer('quotes', 'quotes-table-wrap', 'col-cust-dropdown-quotes', 'col-cust-container-quotes', QUOTES_COLUMNS);
+  initColumnCustomizer('orders', 'orders-table-wrap', 'col-cust-dropdown-orders', 'col-cust-container-orders', ORDERS_COLUMNS);
+  initColumnCustomizer('tickets', 'tickets-table-wrap', 'col-cust-dropdown-tickets', 'col-cust-container-tickets', TICKETS_COLUMNS);
+  initColumnCustomizer('campaigns', 'campaigns-table-wrap', 'col-cust-dropdown-campaigns', 'col-cust-container-campaigns', CAMPAIGNS_COLUMNS);
 
   await loadDashboard();
   lucide.createIcons();
@@ -225,17 +232,32 @@ async function showApp() {
   startNotificationPolling();
 }
 
-// Bật tắt Custom Column Dropdown
-document.getElementById('btn-col-cust')?.addEventListener('click', (e) => {
-  e.stopPropagation();
-  const dropdown = document.getElementById('col-cust-dropdown');
-  if (dropdown) dropdown.classList.toggle('show');
-});
+// Bật tắt Custom Column Dropdown cho nhiều bảng
+function setupColumnDropdownToggle(btnId, dropdownId) {
+  document.getElementById(btnId)?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    // Đóng tất cả dropdown cột khác trước khi mở
+    document.querySelectorAll('.col-customizer-dropdown.show').forEach(d => {
+      if (d.id !== dropdownId) d.classList.remove('show');
+    });
+    const dropdown = document.getElementById(dropdownId);
+    if (dropdown) dropdown.classList.toggle('show');
+  });
+}
+
+setupColumnDropdownToggle('btn-col-cust', 'col-cust-dropdown');
+setupColumnDropdownToggle('btn-col-contacts', 'col-cust-dropdown-contacts');
+setupColumnDropdownToggle('btn-col-activities', 'col-cust-dropdown-activities');
+setupColumnDropdownToggle('btn-col-opps', 'col-cust-dropdown-opps');
+setupColumnDropdownToggle('btn-col-quotes', 'col-cust-dropdown-quotes');
+setupColumnDropdownToggle('btn-col-orders', 'col-cust-dropdown-orders');
+setupColumnDropdownToggle('btn-col-tickets', 'col-cust-dropdown-tickets');
+setupColumnDropdownToggle('btn-col-campaigns', 'col-cust-dropdown-campaigns');
+
 // Đóng khi click ngoài (đã có event listener click ngoài ở notifications.js nhưng ta gom thêm vào đây)
 document.addEventListener('click', (e) => {
-  const dropdown = document.getElementById('col-cust-dropdown');
-  if (dropdown && !e.target.closest('#btn-col-cust') && !e.target.closest('#col-cust-dropdown')) {
-    dropdown.classList.remove('show');
+  if (!e.target.closest('.col-customizer-dropdown') && !e.target.closest('[id^="btn-col-"]')) {
+    document.querySelectorAll('.col-customizer-dropdown.show').forEach(d => d.classList.remove('show'));
   }
 });
 

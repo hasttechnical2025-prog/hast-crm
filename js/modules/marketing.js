@@ -23,8 +23,21 @@ import {
   setCustomInputValue,
   getCustomInputValue,
   extractFormData,
-  timeAgo
+  timeAgo,
+  syncColumnVisibility
 } from '../utils.js';
+
+export const CAMPAIGNS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'name', label: 'Tên chiến dịch', required: true },
+  { key: 'type', label: 'Loại' },
+  { key: 'time', label: 'Thời gian' },
+  { key: 'sent', label: 'Đã gửi' },
+  { key: 'conversion', label: 'Chuyển đổi' },
+  { key: 'revenue', label: 'Doanh thu' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
 
 // =============================================================
 // TAB 7: CAMPAIGNS (Marketing)
@@ -62,15 +75,15 @@ export function renderCampaigns() {
   }
   tbody.innerHTML = st.items.map(c => `
     <tr onclick="openCampaignForm('${c.id}')">
-      <td><span class="code">${escapeHtml(c.code||'')}</span></td>
-      <td><strong>${escapeHtml(c.name||'')}</strong></td>
-      <td>${escapeHtml(c.type||'-')}</td>
-      <td class="text-sm">${formatDateVN(c.startDate)} → ${formatDateVN(c.endDate)}</td>
-      <td class="text-right">${formatNumber(c.sentCount||0)}</td>
-      <td class="text-right">${formatNumber(c.convertedCount||0)}</td>
-      <td class="text-right">${formatShortMoney(c.revenue||0)}</td>
-      <td>${campaignStatusBadge(c.status)}</td>
-      <td class="col-actions" onclick="event.stopPropagation()">
+      <td data-col="code"><span class="code">${escapeHtml(c.code||'')}</span></td>
+      <td data-col="name"><strong>${escapeHtml(c.name||'')}</strong></td>
+      <td data-col="type">${escapeHtml(c.type||'-')}</td>
+      <td data-col="time" class="text-sm">${formatDateVN(c.startDate)} → ${formatDateVN(c.endDate)}</td>
+      <td data-col="sent" class="text-right">${formatNumber(c.sentCount||0)}</td>
+      <td data-col="conversion" class="text-right">${formatNumber(c.convertedCount||0)}</td>
+      <td data-col="revenue" class="text-right">${formatShortMoney(c.revenue||0)}</td>
+      <td data-col="status">${campaignStatusBadge(c.status)}</td>
+      <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
         <div class="row-actions">
           ${c.status !== 'Hoàn thành' && c.status !== 'Huỷ' ? `<button class="row-action-btn" onclick="sendCampaign('${c.id}')" title="Gửi chiến dịch"><i data-lucide="send" style="width:14px;height:14px"></i></button>` : ''}
           <button class="row-action-btn" onclick="openCampaignForm('${c.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
@@ -80,6 +93,7 @@ export function renderCampaigns() {
     </tr>
   `).join('');
   lucide.createIcons();
+  syncColumnVisibility('campaigns', 'campaigns-table-wrap', CAMPAIGNS_COLUMNS);
   renderPagination('campaigns-pagination', st, 'loadCampaigns');
 }
 export async function openCampaignForm(id) {

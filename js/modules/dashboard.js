@@ -30,7 +30,7 @@ import {
 // DASHBOARD
 // ============================================================
 export async function loadDashboard() {
-  showLoading('Đang tải tổng quan...');
+
   try {
     const data = await api('report.dashboard', {}, {});
     state.dashboard = data;

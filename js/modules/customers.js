@@ -452,7 +452,7 @@ export async function setupProvinceWardDropdowns(selectedProvince, selectedWard)
 }
 
 export async function openCustomerForm(id) {
-  showLoading('Đang chuẩn bị biểu mẫu...');
+
   try {
     const form = document.getElementById('form-customer');
     form.reset();
@@ -715,6 +715,17 @@ export async function loadContacts(page) {
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
+export const CONTACTS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'name', label: 'Họ tên', required: true },
+  { key: 'customer', label: 'Khách hàng' },
+  { key: 'position', label: 'Chức vụ' },
+  { key: 'phone', label: 'Điện thoại' },
+  { key: 'email', label: 'Email' },
+  { key: 'isPrimary', label: 'Chính' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
+
 export function renderContacts() {
   const st = state.contacts;
   document.getElementById('contacts-count').textContent = `Tổng ${formatNumber(st.total)} liên hệ`;
@@ -729,14 +740,14 @@ export function renderContacts() {
     const cust = custMap[c.customerId];
     return `
       <tr onclick="openContactForm('${c.id}')">
-        <td><span class="code">${escapeHtml(c.code||'')}</span></td>
-        <td><strong>${escapeHtml(c.fullName||'')}</strong></td>
-        <td>${cust ? escapeHtml(cust.name) : '<span class="text-muted">-</span>'}</td>
-        <td>${escapeHtml(c.position||'-')}</td>
-        <td>${formatPhone(c.mobile||c.phone)||'-'}</td>
-        <td>${escapeHtml(c.email||'-')}</td>
-        <td>${(c.isPrimary==='TRUE'||c.isPrimary===true)?'<span class="badge-pill info">Chính</span>':''}</td>
-        <td class="col-actions" onclick="event.stopPropagation()">
+        <td data-col="code"><span class="code">${escapeHtml(c.code||'')}</span></td>
+        <td data-col="name"><strong>${escapeHtml(c.fullName||'')}</strong></td>
+        <td data-col="customer">${cust ? escapeHtml(cust.name) : '<span class="text-muted">-</span>'}</td>
+        <td data-col="position">${escapeHtml(c.position||'-')}</td>
+        <td data-col="phone">${formatPhone(c.mobile||c.phone)||'-'}</td>
+        <td data-col="email">${escapeHtml(c.email||'-')}</td>
+        <td data-col="isPrimary">${(c.isPrimary==='TRUE'||c.isPrimary===true)?'<span class="badge-pill info">Chính</span>':''}</td>
+        <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
           <div class="row-actions">
             <button class="row-action-btn" onclick="openContactForm('${c.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
             <button class="row-action-btn danger" onclick="deleteContact('${c.id}')"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
@@ -745,6 +756,7 @@ export function renderContacts() {
       </tr>`;
   }).join('');
   lucide.createIcons();
+  syncColumnVisibility('contacts', 'contacts-table-wrap', CONTACTS_COLUMNS);
   renderPagination('contacts-pagination', st, 'loadContacts');
 }
 
@@ -760,7 +772,7 @@ export async function populateCustomerDropdown(selectId, includeEmpty) {
 }
 
 export async function openContactForm(id) {
-  showLoading('Đang chuẩn bị biểu mẫu...');
+
   try {
     await populateCustomerDropdown('contact-customer-select', false);
     const form = document.getElementById('form-contact');
@@ -839,6 +851,16 @@ export async function loadActivities(page) {
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }
+export const ACTIVITIES_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'type', label: 'Loại' },
+  { key: 'title', label: 'Tiêu đề', required: true },
+  { key: 'time', label: 'Thời gian' },
+  { key: 'priority', label: 'Ưu tiên' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
+
 export function renderActivities() {
   const st = state.activities;
   document.getElementById('activities-count').textContent = `Tổng ${formatNumber(st.total)} hoạt động`;
@@ -850,13 +872,13 @@ export function renderActivities() {
   const typeLabel = { call:'Cuộc gọi', meeting:'Họp/Demo', task:'Nhiệm vụ', email:'Email', visit:'Thăm khách', sms:'SMS' };
   tbody.innerHTML = st.items.map(a => `
     <tr onclick="openActivityForm('${a.id}')">
-      <td><span class="code">${escapeHtml(a.code||'')}</span></td>
-      <td>${escapeHtml(typeLabel[a.type]||a.type)}</td>
-      <td><strong>${escapeHtml(a.title||'')}</strong></td>
-      <td>${formatDateTimeVN(a.startTime)}</td>
-      <td>${priorityBadge(a.priority)}</td>
-      <td>${activityStatusBadge(a.status)}</td>
-      <td class="col-actions" onclick="event.stopPropagation()">
+      <td data-col="code"><span class="code">${escapeHtml(a.code||'')}</span></td>
+      <td data-col="type">${escapeHtml(typeLabel[a.type]||a.type)}</td>
+      <td data-col="title"><strong>${escapeHtml(a.title||'')}</strong></td>
+      <td data-col="time">${formatDateTimeVN(a.startTime)}</td>
+      <td data-col="priority">${priorityBadge(a.priority)}</td>
+      <td data-col="status">${activityStatusBadge(a.status)}</td>
+      <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
         <div class="row-actions">
           ${a.status !== 'Hoàn thành' ? `<button class="row-action-btn" onclick="completeActivity('${a.id}')" title="Hoàn thành"><i data-lucide="check" style="width:14px;height:14px"></i></button>` : ''}
           <button class="row-action-btn" onclick="openActivityForm('${a.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
@@ -866,6 +888,7 @@ export function renderActivities() {
     </tr>
   `).join('');
   lucide.createIcons();
+  syncColumnVisibility('activities', 'activities-table-wrap', ACTIVITIES_COLUMNS);
   renderPagination('activities-pagination', st, 'loadActivities');
 }
 
@@ -897,7 +920,7 @@ export function calculateActivityDuration() {
 }
 
 export async function openActivityForm(id) {
-  showLoading('Đang chuẩn bị biểu mẫu...');
+
   try {
     const form = document.getElementById('form-activity');
     form.reset();

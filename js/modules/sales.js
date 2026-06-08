@@ -23,8 +23,41 @@ import {
   setCustomInputValue,
   getCustomInputValue,
   extractFormData,
-  timeAgo
+  timeAgo,
+  syncColumnVisibility
 } from '../utils.js';
+
+export const OPPS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'title', label: 'Tên cơ hội', required: true },
+  { key: 'customer', label: 'Khách hàng' },
+  { key: 'stage', label: 'Giai đoạn' },
+  { key: 'value', label: 'Giá trị' },
+  { key: 'probability', label: '% TT' },
+  { key: 'closeDate', label: 'Đóng dự kiến' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
+
+export const QUOTES_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'customer', label: 'Khách hàng' },
+  { key: 'date', label: 'Ngày báo giá' },
+  { key: 'validDate', label: 'Hiệu lực đến' },
+  { key: 'value', label: 'Tổng tiền' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
+
+export const ORDERS_COLUMNS = [
+  { key: 'code', label: 'Mã', required: true },
+  { key: 'customer', label: 'Khách hàng' },
+  { key: 'date', label: 'Ngày đặt' },
+  { key: 'total', label: 'Tổng tiền' },
+  { key: 'debt', label: 'Công nợ' },
+  { key: 'status', label: 'Trạng thái' },
+  { key: 'payment', label: 'Thanh toán' },
+  { key: 'actions', label: 'Hành động', required: true }
+];
 
 // =============================================================
 // TAB 5: SALES - sub-tabs (Opportunities / Quotes / Orders)
@@ -72,14 +105,14 @@ export function renderOpps() {
   const custMap = {}; state.allCustomers.forEach(c => { custMap[c.id] = c; });
   tbody.innerHTML = st.items.map(o => `
     <tr onclick="openOpportunityForm('${o.id}')">
-      <td><span class="code">${escapeHtml(o.code||'')}</span></td>
-      <td><strong>${escapeHtml(o.name||'')}</strong></td>
-      <td>${custMap[o.customerId] ? escapeHtml(custMap[o.customerId].name) : '-'}</td>
-      <td>${stageBadge(o.stage)}</td>
-      <td class="text-right">${formatShortMoney(o.estimatedValue||0)}</td>
-      <td class="text-right">${o.probability||0}%</td>
-      <td>${formatDateVN(o.expectedCloseDate)}</td>
-      <td class="col-actions" onclick="event.stopPropagation()">
+      <td data-col="code"><span class="code">${escapeHtml(o.code||'')}</span></td>
+      <td data-col="title"><strong>${escapeHtml(o.name||'')}</strong></td>
+      <td data-col="customer">${custMap[o.customerId] ? escapeHtml(custMap[o.customerId].name) : '-'}</td>
+      <td data-col="stage">${stageBadge(o.stage)}</td>
+      <td data-col="value" class="text-right">${formatShortMoney(o.estimatedValue||0)}</td>
+      <td data-col="probability" class="text-right">${o.probability||0}%</td>
+      <td data-col="closeDate">${formatDateVN(o.expectedCloseDate)}</td>
+      <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
         <div class="row-actions">
           <button class="row-action-btn" onclick="openOpportunityForm('${o.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
           <button class="row-action-btn danger" onclick="deleteOpp('${o.id}')"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
@@ -88,10 +121,11 @@ export function renderOpps() {
     </tr>
   `).join('');
   lucide.createIcons();
+  syncColumnVisibility('opps', 'opps-table-wrap', OPPS_COLUMNS);
   renderPagination('opps-pagination', st, 'loadOpps');
 }
 export async function openOpportunityForm(id) {
-  showLoading('Đang chuẩn bị biểu mẫu...');
+
   try {
     await populateCustomerDropdown('opp-customer-select', false);
     const form = document.getElementById('form-opportunity');
@@ -174,13 +208,13 @@ export function renderQuotes() {
   const custMap = {}; state.allCustomers.forEach(c => { custMap[c.id] = c; });
   tbody.innerHTML = st.items.map(q => `
     <tr onclick="openQuoteForm('${q.id}')">
-      <td><span class="code">${escapeHtml(q.code||'')}</span></td>
-      <td>${custMap[q.customerId] ? escapeHtml(custMap[q.customerId].name) : '-'}</td>
-      <td>${formatDateVN(q.issueDate)}</td>
-      <td>${formatDateVN(q.validUntil)}</td>
-      <td class="text-right"><strong>${formatVND(q.totalAmount||0)}</strong></td>
-      <td>${quoteStatusBadge(q.status)}</td>
-      <td class="col-actions" onclick="event.stopPropagation()">
+      <td data-col="code"><span class="code">${escapeHtml(q.code||'')}</span></td>
+      <td data-col="customer">${custMap[q.customerId] ? escapeHtml(custMap[q.customerId].name) : '-'}</td>
+      <td data-col="date">${formatDateVN(q.issueDate)}</td>
+      <td data-col="validDate">${formatDateVN(q.validUntil)}</td>
+      <td data-col="value" class="text-right"><strong>${formatVND(q.totalAmount||0)}</strong></td>
+      <td data-col="status">${quoteStatusBadge(q.status)}</td>
+      <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
         <div class="row-actions">
           ${q.status !== 'accepted' ? `<button class="row-action-btn" onclick="convertQuoteToOrder('${q.id}')" title="Chuyển thành đơn"><i data-lucide="arrow-right-circle" style="width:14px;height:14px"></i></button>` : ''}
           <button class="row-action-btn" onclick="openQuoteForm('${q.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
@@ -190,6 +224,7 @@ export function renderQuotes() {
     </tr>
   `).join('');
   lucide.createIcons();
+  syncColumnVisibility('quotes', 'quotes-table-wrap', QUOTES_COLUMNS);
   renderPagination('quotes-pagination', st, 'loadQuotes');
 }
 export async function openQuoteForm(id) {
@@ -254,22 +289,22 @@ export function renderOrders() {
     } else if (o.status === 'Đang giao') {
       statusQuick = `<button class="quick-status-btn success" onclick="event.stopPropagation();quickOrderStatus('${o.id}','Đã giao')" title="Đánh dấu đã giao">✓ Đã giao</button>`;
     }
-    
+
     let paymentQuick = '';
     if (o.paymentStatus !== 'Đã thanh toán' && o.remainingAmount > 0) {
       paymentQuick = `<button class="quick-status-btn warning" onclick="event.stopPropagation();quickOrderPayment('${o.id}',${o.totalAmount||0},${o.paidAmount||0})" title="Ghi nhận thanh toán">💰 Thanh toán</button>`;
     }
-    
+
     return `
       <tr onclick="openOrderForm('${o.id}')">
-        <td><span class="code">${escapeHtml(o.code||'')}</span></td>
-        <td>${custMap[o.customerId] ? escapeHtml(custMap[o.customerId].name) : '-'}</td>
-        <td>${formatDateVN(o.orderDate)}</td>
-        <td class="text-right"><strong>${formatVND(o.totalAmount||0)}</strong></td>
-        <td class="text-right" style="color:${o.remainingAmount>0?'var(--danger)':'var(--ink-3)'}">${formatShortMoney(o.remainingAmount||0)}</td>
-        <td>${orderStatusBadge(o.status)}<div style="margin-top:4px">${statusQuick}</div></td>
-        <td>${paymentBadge(o.paymentStatus)}<div style="margin-top:4px">${paymentQuick}</div></td>
-        <td class="col-actions" onclick="event.stopPropagation()">
+        <td data-col="code"><span class="code">${escapeHtml(o.code||'')}</span></td>
+        <td data-col="customer">${custMap[o.customerId] ? escapeHtml(custMap[o.customerId].name) : '-'}</td>
+        <td data-col="date">${formatDateVN(o.orderDate)}</td>
+        <td data-col="total" class="text-right"><strong>${formatVND(o.totalAmount||0)}</strong></td>
+        <td data-col="debt" class="text-right" style="color:${o.remainingAmount>0?'var(--danger)':'var(--ink-3)'}">${formatShortMoney(o.remainingAmount||0)}</td>
+        <td data-col="status">${orderStatusBadge(o.status)}<div style="margin-top:4px">${statusQuick}</div></td>
+        <td data-col="payment">${paymentBadge(o.paymentStatus)}<div style="margin-top:4px">${paymentQuick}</div></td>
+        <td data-col="actions" class="col-actions" onclick="event.stopPropagation()">
           <div class="row-actions">
             <button class="row-action-btn" onclick="openOrderForm('${o.id}')"><i data-lucide="edit" style="width:14px;height:14px"></i></button>
             <button class="row-action-btn danger" onclick="deleteOrder('${o.id}')"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
@@ -279,6 +314,7 @@ export function renderOrders() {
     `;
   }).join('');
   lucide.createIcons();
+  syncColumnVisibility('orders', 'orders-table-wrap', ORDERS_COLUMNS);
   renderPagination('orders-pagination', st, 'loadOrders');
 }
 
@@ -340,7 +376,7 @@ document.getElementById('orders-filter-payment').addEventListener('change', e =>
 
 // ====== SALES DOC (Quote/Order chia sẻ form với dynamic line items) ======
 export async function openSalesDocForm(mode, id) {
-  showLoading('Đang chuẩn bị biểu mẫu...');
+
   try {
     state.salesDocMode = mode;
     state.currentEditing = null;
