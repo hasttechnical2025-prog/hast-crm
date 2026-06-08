@@ -357,6 +357,10 @@ async function crudCreate(tableName, user, payload) {
   let snakePayload = camelToSnake(payload);
   snakePayload = sanitizePayload(snakePayload);
 
+  // Extract items to prevent Supabase 'column does not exist' error
+  const items = snakePayload.items;
+  delete snakePayload.items;
+
   if (!snakePayload.id) {
     snakePayload.id = require('crypto').randomUUID();
   }
@@ -402,6 +406,35 @@ async function crudCreate(tableName, user, payload) {
     .single();
 
   if (error) throw error;
+
+  // Insert line items for quotes and orders
+  if (['crm_quotes', 'crm_orders'].includes(tableName) && items && items.length > 0) {
+    const formattedItems = items.map(item => ({
+      id: require('crypto').randomUUID(),
+      parent_type: tableName === 'crm_quotes' ? 'quote' : 'order',
+      parent_id: data.id,
+      customer_id: data.customer_id,
+      product_id: item.product_id,
+      quantity: Number(item.quantity) || 1,
+      unit: item.unit || '',
+      unit_price: Number(item.unit_price) || 0,
+      discount_percent: Number(item.discount_percent) || 0,
+      vat_rate: Number(item.vat_rate) || 10,
+      amount: Number(item.quantity * item.unit_price * (1 - (item.discount_percent || 0)/100) * (1 + (item.vat_rate || 10)/100)) || 0,
+      notes: item.notes || '',
+      created_by: user.id,
+      updated_by: user.id
+    }));
+    await supabase.from('crm_order_items').insert(formattedItems);
+  }
+
+  // Auto-create workflows for Orders and Tickets
+  if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
+    const { autoCreateWorkflowsForEntity } = require('./workflowController');
+    // Execute asynchronously to not block response
+    autoCreateWorkflowsForEntity(tableName, data, user);
+  }
+
   return snakeToCamel(data);
 }
 
@@ -431,6 +464,10 @@ async function crudUpdate(tableName, user, id, payload) {
     }
   }
 
+  // Extract items to prevent Supabase 'column does not exist' error
+  const items = snakePayload.items;
+  delete snakePayload.items;
+
   delete snakePayload.id;
   delete snakePayload.created_by;
   delete snakePayload.created_at;
@@ -446,6 +483,34 @@ async function crudUpdate(tableName, user, id, payload) {
     .single();
 
   if (error) throw error;
+
+  // Update line items for quotes and orders
+  if (['crm_quotes', 'crm_orders'].includes(tableName) && items !== undefined) {
+    // Xoá mềm (soft delete) các mặt hàng cũ
+    await supabase.from('crm_order_items').update({ is_deleted: true, updated_by: user.id }).eq('parent_id', id);
+
+    // Thêm các mặt hàng mới
+    if (items && items.length > 0) {
+      const formattedItems = items.map(item => ({
+        id: require('crypto').randomUUID(),
+        parent_type: tableName === 'crm_quotes' ? 'quote' : 'order',
+        parent_id: id,
+        customer_id: data.customer_id,
+        product_id: item.product_id,
+        quantity: Number(item.quantity) || 1,
+        unit: item.unit || '',
+        unit_price: Number(item.unit_price) || 0,
+        discount_percent: Number(item.discount_percent) || 0,
+        vat_rate: Number(item.vat_rate) || 10,
+        amount: Number(item.quantity * item.unit_price * (1 - (item.discount_percent || 0)/100) * (1 + (item.vat_rate || 10)/100)) || 0,
+        notes: item.notes || '',
+        created_by: user.id,
+        updated_by: user.id
+      }));
+      await supabase.from('crm_order_items').insert(formattedItems);
+    }
+  }
+
   return snakeToCamel(data);
 }
 
