@@ -461,8 +461,58 @@ async function workflowGet(currentUser, id) {
     try { history = JSON.parse(history); } catch (e) { history = []; }
   }
 
+  // Fetch related entity (order or ticket)
+  let entity = null;
+  let customer = null;
+  let orderItems = [];
+
+  if (wf.entity_type === 'order') {
+    const { data: ord } = await supabase.from('crm_orders').select('*').eq('id', wf.entity_id).single();
+    entity = ord;
+    if (entity) {
+      const { data: cust } = await supabase.from('crm_customers').select('*').eq('id', entity.customer_id).single();
+      customer = cust;
+
+      const { data: items } = await supabase
+        .from('crm_order_items')
+        .select('*, product:crm_products(*)')
+        .eq('parent_type', 'order')
+        .eq('parent_id', entity.id)
+        .eq('is_deleted', false);
+      if (items) orderItems = items;
+    }
+  } else if (wf.entity_type === 'ticket') {
+    const { data: ticket } = await supabase.from('crm_support_tickets').select('*').eq('id', wf.entity_id).single();
+    entity = ticket;
+    if (entity) {
+      const { data: cust } = await supabase.from('crm_customers').select('*').eq('id', entity.customer_id).single();
+      customer = cust;
+    }
+  }
+
+  // Lọc bớt thông tin nhạy cảm cho nhân viên Kỹ Thuật (KT Staff)
+  const isKtStaff = role === 'staff' && userDept === 'KT';
+  if (isKtStaff && customer) {
+    customer = {
+      id: customer.id,
+      code: customer.code,
+      name: customer.name,
+      address: customer.address,
+      district: customer.district,
+      province: customer.province
+    };
+  }
+  if (isKtStaff && entity) {
+    entity.total_amount = null;
+    entity.paid_amount = null;
+    entity.remaining_amount = null;
+  }
+
   return {
-    ...snakeToCamel(wf),
+    workflow: snakeToCamel(wf),
+    entity: snakeToCamel(entity),
+    customer: snakeToCamel(customer),
+    orderItems: snakeToCamel(orderItems),
     history: history || [],
     canMove: canMoveWorkflow(currentUser, wf, stages, userDept)
   };

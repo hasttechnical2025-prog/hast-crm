@@ -71,23 +71,25 @@ const WORKFLOW_STAGES_FE = {
 /**
  * Load workflows theo type hiện tại và render Kanban
  */
-export async function loadWorkflows() {
+export async function loadWorkflows(options = {}) {
   const board = document.getElementById('kanban-board');
-  board.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải quy trình...</div>';
+  if (!options.silent) {
+    board.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải quy trình...</div>';
+  }
   try {
     // Phase 4B2: load users để hiển thị mini avatar + populate filter dropdown
     await ensureAllUsers();
-    
+
     const type = state.workflow.currentType;
-    const r = await api('workflow.list', null, { workflowType: type });
+    const r = await api('workflow.list', null, { workflowType: type }, options);
     state.workflow.data = r;
-    
+
     // Cập nhật count badge cho type hiện tại
     document.getElementById('wf-count-' + type).textContent = r.total || 0;
     // Lazy load count cho 2 type còn lại
     ['sales', 'installation', 'maintenance'].forEach(otherType => {
       if (otherType !== type) {
-        api('workflow.list', null, { workflowType: otherType })
+        api('workflow.list', null, { workflowType: otherType }, { silent: true })
           .then(r2 => {
             const el = document.getElementById('wf-count-' + otherType);
             if (el) el.textContent = r2.total || 0;
@@ -95,14 +97,16 @@ export async function loadWorkflows() {
           .catch(() => {});
       }
     });
-    
+
     renderKanbanBoard();
-    
+
     // Phase 4B2: bind filter events + refresh assignee options
     bindWorkflowFilterEvents();
     refreshAssigneeFilterOptions();
   } catch (e) {
-    board.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
+    if (!options.silent) {
+      board.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
+    }
     if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
   }
 }

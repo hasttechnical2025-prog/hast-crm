@@ -307,6 +307,8 @@ function startNotificationPolling() {
         await window.loadTickets(null, opts);
       } else if (tab === 'marketing' && typeof window.loadCampaigns === 'function') {
         await window.loadCampaigns(null, opts);
+      } else if (tab === 'workflow' && typeof window.loadWorkflows === 'function') {
+        await window.loadWorkflows(opts);
       }
     } catch (e) {
       console.warn('Đồng bộ ngầm thất bại:', e.message);
