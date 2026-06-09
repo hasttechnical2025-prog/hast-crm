@@ -62,41 +62,6 @@ async function handleRequest(req, res) {
 
     const currentUser = await authenticateRequest(token);
 
-    // Endpoint test insert crm_workflows trực quan cho trình duyệt để bắt lỗi cấu hình DB
-    if (action === 'test.insert') {
-      try {
-        const todayStr = new Date().toISOString();
-        const salesWf = {
-          id: require('crypto').randomUUID(),
-          code: 'WF2026-TEST',
-          workflow_type: 'sales',
-          entity_type: 'order',
-          entity_id: '00000000-0000-0000-0000-000000000000',
-          current_stage: 'kd_processing',
-          current_dept: 'KD',
-          assigned_to: currentUser.id,
-          priority: 'Trung bình',
-          due_date: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
-          history: [{ stage: 'kd_processing', movedAt: todayStr, movedBy: currentUser.id }],
-          status: 'active',
-          created_by: currentUser.id,
-          updated_by: currentUser.id,
-          created_at: todayStr,
-          updated_at: todayStr,
-          is_deleted: false
-        };
-
-        const { data, error } = await supabase.from('crm_workflows').insert(salesWf).select();
-        if (error) {
-          return res.json({ success: false, error: error });
-        }
-        await supabase.from('crm_workflows').delete().eq('id', salesWf.id);
-        return res.json({ success: true, message: 'Insert crm_workflows succeeded!', data: data });
-      } catch (err) {
-        return res.json({ success: false, error: { message: err.message, stack: err.stack } });
-      }
-    }
-
     let result;
 
     const entityToTable = {

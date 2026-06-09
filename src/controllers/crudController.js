@@ -469,8 +469,7 @@ async function crudCreate(tableName, user, payload) {
   // Auto-create workflows for Orders and Tickets
   if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
     const { autoCreateWorkflowsForEntity } = require('./workflowController');
-    // Execute asynchronously to not block response
-    autoCreateWorkflowsForEntity(tableName, data, user);
+    await autoCreateWorkflowsForEntity(tableName, data, user);
   }
 
   return snakeToCamel(data);
@@ -591,15 +590,15 @@ async function crudUpdate(tableName, user, id, payload) {
   // Auto-create workflows for Orders and Tickets on update if they don't exist yet (defensive check)
   if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
     try {
-      const { count: wfCount } = await supabase
+      const { data: existingWfs } = await supabase
         .from('crm_workflows')
-        .select('id', { count: 'exact', head: true })
+        .select('id')
         .eq('entity_id', id)
         .eq('is_deleted', false);
 
-      if (wfCount === 0) {
+      if (!existingWfs || existingWfs.length === 0) {
         const { autoCreateWorkflowsForEntity } = require('./workflowController');
-        autoCreateWorkflowsForEntity(tableName, data, user);
+        await autoCreateWorkflowsForEntity(tableName, data, user);
       }
     } catch (wfErr) {
       console.error('Error checking workflows on update:', wfErr);
