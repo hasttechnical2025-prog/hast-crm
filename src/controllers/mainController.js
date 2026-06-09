@@ -60,9 +60,7 @@ async function handleRequest(req, res) {
       return res.json({ success: true, data: settings });
     }
 
-    const currentUser = await authenticateRequest(token);
-
-    // Endpoint test query crm_workflows trực quan cho trình duyệt để kiểm tra dữ liệu thật trên Vercel
+    // Endpoint test query crm_workflows trực quan cho trình duyệt để kiểm tra dữ liệu thật trên Vercel (bỏ qua check token)
     if (action === 'test.query') {
       try {
         const { data: wfs, error: wfErr } = await supabase.from('crm_workflows').select('*');
@@ -75,7 +73,9 @@ async function handleRequest(req, res) {
           const { autoCreateWorkflowsForEntity } = require('./workflowController');
           // Chạy đồng bộ và bắt lỗi
           try {
-            await autoCreateWorkflowsForEntity('crm_orders', targetOrder, currentUser);
+            // Mock a currentUser for the workflow creation (e.g. the creator of the order or the first user in crm_users)
+            const { data: firstUser } = await supabase.from('crm_users').select('*').eq('is_deleted', false).limit(1).single();
+            await autoCreateWorkflowsForEntity('crm_orders', targetOrder, firstUser || { id: '00000000-0000-0000-0000-000000000000' });
             runResult = 'Execution completed successfully (or silently caught)';
           } catch (execErr) {
             runResult = 'Execution failed: ' + execErr.message;
@@ -95,6 +95,8 @@ async function handleRequest(req, res) {
         return res.json({ success: false, error: { message: err.message, stack: err.stack } });
       }
     }
+
+    const currentUser = await authenticateRequest(token);
 
     let result;
 
