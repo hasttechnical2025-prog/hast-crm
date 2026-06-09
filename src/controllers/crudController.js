@@ -361,6 +361,44 @@ async function crudCreate(tableName, user, payload) {
   const items = snakePayload.items;
   delete snakePayload.items;
 
+  // Tự động tính toán tổng tiền trên backend cho báo giá và đơn hàng
+  if (['crm_quotes', 'crm_orders'].includes(tableName) && items && items.length > 0) {
+    let subtotal = 0;
+    let discountAmount = 0;
+    let vatAmount = 0;
+
+    items.forEach(item => {
+      const qty = Number(item.quantity) || 0;
+      const price = Number(item.unit_price) || 0;
+      const dp = Number(item.discount_percent) || 0;
+      const vp = Number(item.vat_rate) || 0;
+
+      const gross = qty * price;
+      const d = gross * dp / 100;
+      const afterD = gross - d;
+      const v = afterD * vp / 100;
+
+      subtotal += gross;
+      discountAmount += d;
+      vatAmount += v;
+    });
+
+    const shippingFee = Number(snakePayload.shipping_fee) || 0;
+    const totalAmount = subtotal - discountAmount + vatAmount + (tableName === 'crm_orders' ? shippingFee : 0);
+
+    snakePayload.subtotal = subtotal;
+    snakePayload.discount_amount = discountAmount;
+    snakePayload.vat_amount = vatAmount;
+    snakePayload.total_amount = totalAmount;
+
+    if (tableName === 'crm_quotes') {
+      snakePayload.value = totalAmount;
+    } else if (tableName === 'crm_orders') {
+      const paidAmount = Number(snakePayload.paid_amount) || 0;
+      snakePayload.remaining_amount = totalAmount - paidAmount;
+    }
+  }
+
   if (!snakePayload.id) {
     snakePayload.id = require('crypto').randomUUID();
   }
@@ -467,6 +505,45 @@ async function crudUpdate(tableName, user, id, payload) {
   // Extract items to prevent Supabase 'column does not exist' error
   const items = snakePayload.items;
   delete snakePayload.items;
+
+  // Tự động tính toán tổng tiền trên backend cho báo giá và đơn hàng khi sửa
+  if (['crm_quotes', 'crm_orders'].includes(tableName) && items && items.length > 0) {
+    let subtotal = 0;
+    let discountAmount = 0;
+    let vatAmount = 0;
+
+    items.forEach(item => {
+      const qty = Number(item.quantity) || 0;
+      const price = Number(item.unit_price) || 0;
+      const dp = Number(item.discount_percent) || 0;
+      const vp = Number(item.vat_rate) || 0;
+
+      const gross = qty * price;
+      const d = gross * dp / 100;
+      const afterD = gross - d;
+      const v = afterD * vp / 100;
+
+      subtotal += gross;
+      discountAmount += d;
+      vatAmount += v;
+    });
+
+    // Cần lấy phí vận chuyển hiện tại hoặc mới
+    const shippingFee = snakePayload.shipping_fee !== undefined ? Number(snakePayload.shipping_fee) : Number(existingData.shippingFee || 0);
+    const totalAmount = subtotal - discountAmount + vatAmount + (tableName === 'crm_orders' ? shippingFee : 0);
+
+    snakePayload.subtotal = subtotal;
+    snakePayload.discount_amount = discountAmount;
+    snakePayload.vat_amount = vatAmount;
+    snakePayload.total_amount = totalAmount;
+
+    if (tableName === 'crm_quotes') {
+      snakePayload.value = totalAmount;
+    } else if (tableName === 'crm_orders') {
+      const paidAmount = snakePayload.paid_amount !== undefined ? Number(snakePayload.paid_amount) : Number(existingData.paidAmount || 0);
+      snakePayload.remaining_amount = totalAmount - paidAmount;
+    }
+  }
 
   delete snakePayload.id;
   delete snakePayload.created_by;
