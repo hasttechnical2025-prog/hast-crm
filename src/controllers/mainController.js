@@ -62,6 +62,40 @@ async function handleRequest(req, res) {
 
     const currentUser = await authenticateRequest(token);
 
+    // Endpoint test query crm_workflows trực quan cho trình duyệt để kiểm tra dữ liệu thật trên Vercel
+    if (action === 'test.query') {
+      try {
+        const { data: wfs, error: wfErr } = await supabase.from('crm_workflows').select('*');
+        const { data: orders, error: ordErr } = await supabase.from('crm_orders').select('id, code, is_deleted');
+
+        // Thử chạy trực tiếp hàm tự sinh workflow cho đơn hàng DH2026-0003 để xem lỗi gì ném ra!
+        let runResult = 'Not run';
+        const { data: targetOrder } = await supabase.from('crm_orders').select('*').eq('code', 'DH2026-0003').eq('is_deleted', false).maybeSingle();
+        if (targetOrder) {
+          const { autoCreateWorkflowsForEntity } = require('./workflowController');
+          // Chạy đồng bộ và bắt lỗi
+          try {
+            await autoCreateWorkflowsForEntity('crm_orders', targetOrder, currentUser);
+            runResult = 'Execution completed successfully (or silently caught)';
+          } catch (execErr) {
+            runResult = 'Execution failed: ' + execErr.message;
+          }
+        } else {
+          runResult = 'Order DH2026-0003 not found';
+        }
+
+        return res.json({
+          success: true,
+          workflows: wfs || [],
+          orders: orders || [],
+          runResult: runResult,
+          errors: { wfErr, ordErr }
+        });
+      } catch (err) {
+        return res.json({ success: false, error: { message: err.message, stack: err.stack } });
+      }
+    }
+
     let result;
 
     const entityToTable = {
