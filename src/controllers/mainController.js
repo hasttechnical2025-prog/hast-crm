@@ -1,5 +1,6 @@
 const { supabase } = require('../config');
 const { authenticateRequest, handleError } = require('../middlewares/auth');
+const { snakeToCamel } = require('../utils/helpers');
 
 const { authLogin, authLogout, authMe, authChangePassword, authAdminResetPassword, authUpdateProfile } = require('./authController');
 const { crudList, crudCreate, crudUpdate, crudDelete, crudGet, settingList, settingUpdate, userCreate, userUpdate, customerGet } = require('./crudController');
@@ -205,6 +206,18 @@ async function handleRequest(req, res) {
         case 'get':
           if (entity === 'customer') {
             result = await customerGet(currentUser, params.id || payload.id);
+          } else if (entity === 'quote' || entity === 'order') {
+            const docId = params.id || payload.id;
+            const doc = await crudGet(tableName, currentUser, docId);
+            const { data: items } = await supabase
+              .from('crm_order_items')
+              .select('*, product:crm_products(*)')
+              .eq('parent_id', docId)
+              .eq('is_deleted', false);
+            result = {
+              [entity]: doc,
+              items: snakeToCamel(items || [])
+            };
           } else {
             result = await crudGet(tableName, currentUser, params.id || payload.id);
           }

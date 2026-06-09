@@ -413,7 +413,6 @@ async function crudCreate(tableName, user, payload) {
       id: require('crypto').randomUUID(),
       parent_type: tableName === 'crm_quotes' ? 'quote' : 'order',
       parent_id: data.id,
-      customer_id: data.customer_id,
       product_id: item.product_id,
       quantity: Number(item.quantity) || 1,
       unit: item.unit || '',
@@ -425,7 +424,8 @@ async function crudCreate(tableName, user, payload) {
       created_by: user.id,
       updated_by: user.id
     }));
-    await supabase.from('crm_order_items').insert(formattedItems);
+    const { error: itemErr } = await supabase.from('crm_order_items').insert(formattedItems);
+    if (itemErr) throw itemErr;
   }
 
   // Auto-create workflows for Orders and Tickets
@@ -495,7 +495,6 @@ async function crudUpdate(tableName, user, id, payload) {
         id: require('crypto').randomUUID(),
         parent_type: tableName === 'crm_quotes' ? 'quote' : 'order',
         parent_id: id,
-        customer_id: data.customer_id,
         product_id: item.product_id,
         quantity: Number(item.quantity) || 1,
         unit: item.unit || '',
@@ -507,7 +506,8 @@ async function crudUpdate(tableName, user, id, payload) {
         created_by: user.id,
         updated_by: user.id
       }));
-      await supabase.from('crm_order_items').insert(formattedItems);
+      const { error: itemErr } = await supabase.from('crm_order_items').insert(formattedItems);
+      if (itemErr) throw itemErr;
     }
   }
 
