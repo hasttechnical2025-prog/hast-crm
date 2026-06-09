@@ -588,6 +588,24 @@ async function crudUpdate(tableName, user, id, payload) {
     }
   }
 
+  // Auto-create workflows for Orders and Tickets on update if they don't exist yet (defensive check)
+  if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
+    try {
+      const { count: wfCount } = await supabase
+        .from('crm_workflows')
+        .select('id', { count: 'exact', head: true })
+        .eq('entity_id', id)
+        .eq('is_deleted', false);
+
+      if (wfCount === 0) {
+        const { autoCreateWorkflowsForEntity } = require('./workflowController');
+        autoCreateWorkflowsForEntity(tableName, data, user);
+      }
+    } catch (wfErr) {
+      console.error('Error checking workflows on update:', wfErr);
+    }
+  }
+
   return snakeToCamel(data);
 }
 
