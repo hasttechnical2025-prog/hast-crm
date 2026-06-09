@@ -70,7 +70,8 @@ async function autoCreateWorkflowsForEntity(tableName, entityRecord, currentUser
         updated_at: todayStr,
         is_deleted: false
       };
-      await supabase.from('crm_workflows').insert(salesWf);
+      const { error: salesErr } = await supabase.from('crm_workflows').insert(salesWf);
+      if (salesErr) throw salesErr;
 
       // 2. Kiểm tra xem có máy photocopy trong danh sách sản phẩm của đơn hàng không
       const { data: items } = await supabase
@@ -105,7 +106,8 @@ async function autoCreateWorkflowsForEntity(tableName, entityRecord, currentUser
           updated_at: todayStr,
           is_deleted: false
         };
-        await supabase.from('crm_workflows').insert(instWf);
+        const { error: instErr } = await supabase.from('crm_workflows').insert(instWf);
+        if (instErr) throw instErr;
       }
     } else if (tableName === 'crm_support_tickets') {
       // 3. Tạo Workflow Bảo trì kỹ thuật (maintenance)
@@ -129,7 +131,8 @@ async function autoCreateWorkflowsForEntity(tableName, entityRecord, currentUser
         updated_at: todayStr,
         is_deleted: false
       };
-      await supabase.from('crm_workflows').insert(maintWf);
+      const { error: maintErr } = await supabase.from('crm_workflows').insert(maintWf);
+      if (maintErr) throw maintErr;
     }
   } catch (err) {
     console.error('Error auto-creating workflows:', err);
