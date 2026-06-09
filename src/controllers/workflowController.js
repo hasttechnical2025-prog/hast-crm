@@ -33,36 +33,80 @@ async function generateWorkflowCode() {
     .from('crm_workflows')
     .select('code')
     .ilike('code', `${prefix}%`)
-    .order('code', { ascending: false })
-    .limit(1);
+    .order('code', { ascending: false }); // Lấy toàn bộ thay vì limit(1) để có thể lọc thủ công các code rác
 
   if (data && data.length > 0) {
-    const lastCode = data[0].code;
-    const num = parseInt(lastCode.substring(lastCode.indexOf('-') + 1), 10) + 1;
-    return prefix + String(num).padStart(4, '0');
+    // Tìm mã lớn nhất thực sự là số hợp lệ
+    let maxNum = 0;
+    for (const row of data) {
+      const parts = row.code.split('-');
+      if (parts.length >= 2) {
+        const numStr = parts[1];
+        if (/^\d+$/.test(numStr)) {
+          const num = parseInt(numStr, 10);
+          if (num > maxNum) maxNum = num;
+        }
+      }
+    }
+    return prefix + String(maxNum + 1).padStart(4, '0');
   }
   return prefix + '0001';
 }
 
 async function autoCreateWorkflowsForEntity(tableName, entityRecord, currentUser) {
-  try {
-    const todayStr = new Date().toISOString();
+  const todayStr = new Date().toISOString();
 
-    if (tableName === 'crm_orders') {
-      // 1. Tạo Workflow Bán hàng & Thanh toán (sales)
-      const salesCode = await generateWorkflowCode();
-      const salesWf = {
+  if (tableName === 'crm_orders') {
+    // 1. Tạo Workflow Bán hàng & Thanh toán (sales)
+    const salesCode = await generateWorkflowCode();
+    const salesWf = {
+      id: require('crypto').randomUUID(),
+      code: salesCode,
+      workflow_type: 'sales',
+      entity_type: 'order',
+      entity_id: entityRecord.id,
+      current_stage: 'kd_processing',
+      current_dept: 'KD',
+      assigned_to: entityRecord.assigned_to || currentUser.id,
+      priority: 'Trung bình',
+      due_date: entityRecord.due_date || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+      history: [{ stage: 'kd_processing', movedAt: todayStr, movedBy: currentUser.id }],
+      status: 'active',
+      created_by: currentUser.id,
+      updated_by: currentUser.id,
+      created_at: todayStr,
+      updated_at: todayStr,
+      is_deleted: false
+    };
+    const { error: salesErr } = await supabase.from('crm_workflows').insert(salesWf);
+    if (salesErr) throw salesErr;
+
+    // 2. Kiểm tra xem có máy photocopy trong danh sách sản phẩm của đơn hàng không
+    const { data: items } = await supabase
+      .from('crm_order_items')
+      .select('*, product:crm_products(*)')
+      .eq('parent_id', entityRecord.id)
+      .eq('is_deleted', false);
+
+    const hasPhotocopy = (items || []).some(item =>
+      item.product && item.product.category && String(item.product.category).toLowerCase().includes('máy photocopy')
+    );
+
+    if (hasPhotocopy) {
+      // Tạo thêm Workflow Lắp đặt máy (installation)
+      const instCode = await generateWorkflowCode();
+      const instWf = {
         id: require('crypto').randomUUID(),
-        code: salesCode,
-        workflow_type: 'sales',
+        code: instCode,
+        workflow_type: 'installation',
         entity_type: 'order',
         entity_id: entityRecord.id,
-        current_stage: 'kd_processing',
+        current_stage: 'kd_signed',
         current_dept: 'KD',
         assigned_to: entityRecord.assigned_to || currentUser.id,
         priority: 'Trung bình',
-        due_date: entityRecord.due_date || new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
-        history: [{ stage: 'kd_processing', movedAt: todayStr, movedBy: currentUser.id }],
+        due_date: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10), // Hạn 5 ngày
+        history: [{ stage: 'kd_signed', movedAt: todayStr, movedBy: currentUser.id }],
         status: 'active',
         created_by: currentUser.id,
         updated_by: currentUser.id,
@@ -70,72 +114,33 @@ async function autoCreateWorkflowsForEntity(tableName, entityRecord, currentUser
         updated_at: todayStr,
         is_deleted: false
       };
-      const { error: salesErr } = await supabase.from('crm_workflows').insert(salesWf);
-      if (salesErr) throw salesErr;
-
-      // 2. Kiểm tra xem có máy photocopy trong danh sách sản phẩm của đơn hàng không
-      const { data: items } = await supabase
-        .from('crm_order_items')
-        .select('*, product:crm_products(*)')
-        .eq('parent_id', entityRecord.id)
-        .eq('is_deleted', false);
-
-      const hasPhotocopy = (items || []).some(item =>
-        item.product && String(item.product.category).toLowerCase().includes('máy photocopy')
-      );
-
-      if (hasPhotocopy) {
-        // Tạo thêm Workflow Lắp đặt máy (installation)
-        const instCode = await generateWorkflowCode();
-        const instWf = {
-          id: require('crypto').randomUUID(),
-          code: instCode,
-          workflow_type: 'installation',
-          entity_type: 'order',
-          entity_id: entityRecord.id,
-          current_stage: 'kd_signed',
-          current_dept: 'KD',
-          assigned_to: entityRecord.assigned_to || currentUser.id,
-          priority: 'Trung bình',
-          due_date: new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10), // Hạn 5 ngày
-          history: [{ stage: 'kd_signed', movedAt: todayStr, movedBy: currentUser.id }],
-          status: 'active',
-          created_by: currentUser.id,
-          updated_by: currentUser.id,
-          created_at: todayStr,
-          updated_at: todayStr,
-          is_deleted: false
-        };
-        const { error: instErr } = await supabase.from('crm_workflows').insert(instWf);
-        if (instErr) throw instErr;
-      }
-    } else if (tableName === 'crm_support_tickets') {
-      // 3. Tạo Workflow Bảo trì kỹ thuật (maintenance)
-      const maintCode = await generateWorkflowCode();
-      const maintWf = {
-        id: require('crypto').randomUUID(),
-        code: maintCode,
-        workflow_type: 'maintenance',
-        entity_type: 'ticket',
-        entity_id: entityRecord.id,
-        current_stage: 'received',
-        current_dept: 'KD',
-        assigned_to: entityRecord.assigned_to || currentUser.id,
-        priority: entityRecord.priority || 'Trung bình',
-        due_date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), // Hạn 3 ngày
-        history: [{ stage: 'received', movedAt: todayStr, movedBy: currentUser.id }],
-        status: 'active',
-        created_by: currentUser.id,
-        updated_by: currentUser.id,
-        created_at: todayStr,
-        updated_at: todayStr,
-        is_deleted: false
-      };
-      const { error: maintErr } = await supabase.from('crm_workflows').insert(maintWf);
-      if (maintErr) throw maintErr;
+      const { error: instErr } = await supabase.from('crm_workflows').insert(instWf);
+      if (instErr) throw instErr;
     }
-  } catch (err) {
-    console.error('Error auto-creating workflows:', err);
+  } else if (tableName === 'crm_support_tickets') {
+    // 3. Tạo Workflow Bảo trì kỹ thuật (maintenance)
+    const maintCode = await generateWorkflowCode();
+    const maintWf = {
+      id: require('crypto').randomUUID(),
+      code: maintCode,
+      workflow_type: 'maintenance',
+      entity_type: 'ticket',
+      entity_id: entityRecord.id,
+      current_stage: 'received',
+      current_dept: 'KD',
+      assigned_to: entityRecord.assigned_to || currentUser.id,
+      priority: entityRecord.priority || 'Trung bình',
+      due_date: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10), // Hạn 3 ngày
+      history: [{ stage: 'received', movedAt: todayStr, movedBy: currentUser.id }],
+      status: 'active',
+      created_by: currentUser.id,
+      updated_by: currentUser.id,
+      created_at: todayStr,
+      updated_at: todayStr,
+      is_deleted: false
+    };
+    const { error: maintErr } = await supabase.from('crm_workflows').insert(maintWf);
+    if (maintErr) throw maintErr;
   }
 }
 

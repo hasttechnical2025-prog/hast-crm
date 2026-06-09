@@ -60,42 +60,6 @@ async function handleRequest(req, res) {
       return res.json({ success: true, data: settings });
     }
 
-    // Endpoint test query crm_workflows trực quan cho trình duyệt để kiểm tra dữ liệu thật trên Vercel (bỏ qua check token)
-    if (action === 'test.query') {
-      try {
-        const { data: wfs, error: wfErr } = await supabase.from('crm_workflows').select('*');
-        const { data: orders, error: ordErr } = await supabase.from('crm_orders').select('id, code, is_deleted');
-
-        // Thử chạy trực tiếp hàm tự sinh workflow cho đơn hàng DH2026-0003 để xem lỗi gì ném ra!
-        let runResult = 'Not run';
-        const { data: targetOrder } = await supabase.from('crm_orders').select('*').eq('code', 'DH2026-0003').eq('is_deleted', false).maybeSingle();
-        if (targetOrder) {
-          const { autoCreateWorkflowsForEntity } = require('./workflowController');
-          // Chạy đồng bộ và bắt lỗi
-          try {
-            // Mock a currentUser for the workflow creation (e.g. the creator of the order or the first user in crm_users)
-            const { data: firstUser } = await supabase.from('crm_users').select('*').eq('is_deleted', false).limit(1).single();
-            await autoCreateWorkflowsForEntity('crm_orders', targetOrder, firstUser || { id: '00000000-0000-0000-0000-000000000000' });
-            runResult = 'Execution completed successfully (or silently caught)';
-          } catch (execErr) {
-            runResult = 'Execution failed: ' + execErr.message;
-          }
-        } else {
-          runResult = 'Order DH2026-0003 not found';
-        }
-
-        return res.json({
-          success: true,
-          workflows: wfs || [],
-          orders: orders || [],
-          runResult: runResult,
-          errors: { wfErr, ordErr }
-        });
-      } catch (err) {
-        return res.json({ success: false, error: { message: err.message, stack: err.stack } });
-      }
-    }
-
     const currentUser = await authenticateRequest(token);
 
     let result;
