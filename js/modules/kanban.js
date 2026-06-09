@@ -23,7 +23,8 @@ import {
   setCustomInputValue,
   getCustomInputValue,
   extractFormData,
-  timeAgo
+  timeAgo,
+  escapeHtml
 } from '../utils.js';
 
 // =============================================================

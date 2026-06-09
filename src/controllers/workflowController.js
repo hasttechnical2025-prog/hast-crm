@@ -397,7 +397,17 @@ async function workflowList(currentUser, params) {
     }
   }
 
-  return grouped;
+  // Đếm tổng số thẻ quy trình
+  let totalCount = 0;
+  Object.keys(grouped).forEach(k => {
+    totalCount += grouped[k].items.length;
+  });
+
+  return {
+    total: totalCount,
+    stages: stages,
+    grouped: grouped
+  };
 }
 
 async function workflowGet(currentUser, id) {
