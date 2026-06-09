@@ -473,15 +473,6 @@ export async function doImportProducts(validItems) {
   }
 }
 
-
-  // Reload danh sách sản phẩm trong trang quản trị nếu tab đang hiển thị
-  const activeTab = document.querySelector('.admin-subtab.active')?.dataset.subtab;
-  if (activeTab === 'products') {
-    const { loadAdminProducts } = await import('./admin.js');
-    loadAdminProducts();
-  }
-}
-
 /**
  * Export danh sách người dùng ra Excel
  */
