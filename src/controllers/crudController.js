@@ -422,7 +422,7 @@ async function crudCreate(tableName, user, payload) {
 
   // Tự gán các giá trị mặc định cho những bảng thích hợp (chỉ trừ support tickets, workflows, notifications để trống)
   const hasAssignedCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_activities'].includes(tableName);
-  const hasDeptCol = ['crm_opportunities', 'crm_quotes', 'crm_orders', 'crm_workflows'].includes(tableName);
+  const hasDeptCol = ['crm_opportunities', 'crm_quotes', 'crm_orders'].includes(tableName);
 
   if (hasAssignedCol && !snakePayload.assigned_to) {
     snakePayload.assigned_to = user.id;
@@ -466,11 +466,7 @@ async function crudCreate(tableName, user, payload) {
     if (itemErr) throw itemErr;
   }
 
-  // Auto-create workflows for Orders and Tickets
-  if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
-    const { autoCreateWorkflowsForEntity } = require('./workflowController');
-    await autoCreateWorkflowsForEntity(tableName, data, user);
-  }
+  // Kanban v2: KHÔNG auto-sinh thẻ kanban từ Order/Ticket. Thẻ Kanban là entity độc lập.
 
   return snakeToCamel(data);
 }
@@ -587,23 +583,7 @@ async function crudUpdate(tableName, user, id, payload) {
     }
   }
 
-  // Auto-create workflows for Orders and Tickets on update if they don't exist yet (defensive check)
-  if (['crm_orders', 'crm_support_tickets'].includes(tableName)) {
-    try {
-      const { data: existingWfs } = await supabase
-        .from('crm_workflows')
-        .select('id')
-        .eq('entity_id', id)
-        .eq('is_deleted', false);
-
-      if (!existingWfs || existingWfs.length === 0) {
-        const { autoCreateWorkflowsForEntity } = require('./workflowController');
-        await autoCreateWorkflowsForEntity(tableName, data, user);
-      }
-    } catch (wfErr) {
-      console.error('Error checking workflows on update:', wfErr);
-    }
-  }
+  // Kanban v2: KHÔNG auto-sinh thẻ kanban từ Order/Ticket khi update.
 
   return snakeToCamel(data);
 }

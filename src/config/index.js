@@ -29,7 +29,6 @@ const CONSTANTS = {
     crm_support_tickets: 'TK',
     crm_campaigns: 'CD',
     crm_products: 'SP',
-    crm_workflows: 'WF',
     crm_notifications: 'NT'
   }
 };

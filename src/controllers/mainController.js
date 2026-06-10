@@ -4,7 +4,18 @@ const { snakeToCamel } = require('../utils/helpers');
 
 const { authLogin, authLogout, authMe, authChangePassword, authAdminResetPassword, authUpdateProfile } = require('./authController');
 const { crudList, crudCreate, crudUpdate, crudDelete, crudGet, settingList, settingUpdate, userCreate, userUpdate, customerGet } = require('./crudController');
-const { workflowList, workflowGet, workflowMoveStage, workflowUpdate } = require('./workflowController');
+const {
+  kanbanConfigGet,
+  kanbanBoardGet,
+  kanbanCardGet,
+  kanbanCardCreate,
+  kanbanCardUpdate,
+  kanbanMove,
+  kanbanRentalPeriodCreate,
+  kanbanNotificationsList,
+  kanbanNotificationsRead,
+  kanbanDebtScan,
+} = require('./kanbanController');
 const { reportDashboard, mockReportResponse } = require('./reportController');
 const { customerApprove, customerReject, customerFindDuplicates, customerMerge } = require('./customerController');
 const { notificationList, notificationMarkRead, notificationMarkAllRead } = require('./notificationController');
@@ -101,19 +112,41 @@ async function handleRequest(req, res) {
         result = await authAdminResetPassword(currentUser, payload);
         return res.json({ success: true, data: result, message: 'Reset mật khẩu thành công' });
       }
-    } else if (entity === 'workflow') {
-      if (method === 'list') {
-        result = await workflowList(currentUser, params);
+    } else if (entity === 'kanban') {
+      // === Kanban v2 (spec §6) — phá Kanban cũ "workflow.*", thay bằng "kanban.*" ===
+      // method: config.get | board.get | card.get | card.create | card.update | move
+      //         | rentalPeriod.create | notifications.list | notifications.read | debt.scan
+      const sub = action.substring('kanban.'.length); // ví dụ 'card.create'
+      if (sub === 'config.get') {
+        result = await kanbanConfigGet(currentUser);
         return res.json({ success: true, data: result });
-      } else if (method === 'get') {
-        result = await workflowGet(currentUser, params.id || payload.id);
+      } else if (sub === 'board.get') {
+        result = await kanbanBoardGet(currentUser, params);
         return res.json({ success: true, data: result });
-      } else if (method === 'moveStage') {
-        result = await workflowMoveStage(currentUser, payload);
-        return res.json({ success: true, data: result, message: 'Chuyển giai đoạn quy trình thành công' });
-      } else if (method === 'update') {
-        result = await workflowUpdate(currentUser, payload);
-        return res.json({ success: true, data: result, message: 'Cập nhật quy trình thành công' });
+      } else if (sub === 'card.get') {
+        result = await kanbanCardGet(currentUser, params);
+        return res.json({ success: true, data: result });
+      } else if (sub === 'card.create') {
+        result = await kanbanCardCreate(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Tạo thẻ thành công' });
+      } else if (sub === 'card.update') {
+        result = await kanbanCardUpdate(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Cập nhật thẻ thành công' });
+      } else if (sub === 'move') {
+        result = await kanbanMove(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Đã chuyển stage' });
+      } else if (sub === 'rentalPeriod.create') {
+        result = await kanbanRentalPeriodCreate(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Đã sinh kỳ thuê mới' });
+      } else if (sub === 'notifications.list') {
+        result = await kanbanNotificationsList(currentUser, params);
+        return res.json({ success: true, data: result });
+      } else if (sub === 'notifications.read') {
+        result = await kanbanNotificationsRead(currentUser, payload);
+        return res.json({ success: true, data: result });
+      } else if (sub === 'debt.scan') {
+        result = await kanbanDebtScan(currentUser);
+        return res.json({ success: true, data: result });
       }
     } else if (entity === 'report') {
       if (method === 'dashboard') {
