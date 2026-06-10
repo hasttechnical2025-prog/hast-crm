@@ -20,6 +20,7 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <link rel="stylesheet" href="/css/style.css" />
+<link rel="stylesheet" href="/css/kanban.css" />
 </head>
 <body>
 
@@ -856,66 +857,38 @@
         </div>
       </section>
 
-      <!-- ============ TAB WORKFLOW (Phase 4B) ============ -->
+      <!-- ============ TAB KANBAN v2 (spec §8 — đập bỏ Phase 4B cũ) ============ -->
       <section class="tab-panel" data-panel="workflow">
         <div class="page-header">
           <div>
-            <h1 class="page-title">Quy trình liên phòng ban</h1>
-            <div class="page-subtitle">Theo dõi và chuyển công việc giữa Kinh doanh, Kỹ thuật, Kế toán-Hành chính</div>
+            <h1 class="page-title">Kanban liên phòng</h1>
+            <div class="page-subtitle">Bán máy · Cho thuê máy · Bán vật tư — luồng KD → KT → KTHC</div>
           </div>
           <div class="page-actions">
-            <button class="btn btn-outline btn-sm" data-roles="admin" onclick="workflowBackfill()" title="Tạo workflow cho các đơn/ticket cũ chưa có" style="display:none"><i data-lucide="zap" style="width:14px;height:14px"></i> Tạo cho đơn cũ</button>
-            <button class="btn btn-outline btn-sm" onclick="loadWorkflows()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Làm mới</button>
+            <button class="btn btn-primary btn-sm" onclick="openCreateKanbanCardForm()"><i data-lucide="plus" style="width:14px;height:14px"></i> Tạo thẻ mới</button>
+            <button class="kanban-notif-btn" onclick="openKanbanNotifPanel()" title="Thông báo Kanban">
+              <i data-lucide="bell" style="width:14px;height:14px"></i> Thông báo
+              <span id="kanban-notif-badge"></span>
+            </button>
+            <button class="btn btn-outline btn-sm" onclick="loadKanbanBoard()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Làm mới</button>
           </div>
         </div>
 
-        <!-- Sub-tabs 3 loại workflow -->
-        <div class="sub-tabs workflow-tabs">
-          <button class="sub-tab workflow-tab active" data-wftype="sales">
-            <i data-lucide="shopping-cart" style="width:14px;height:14px"></i> Bán hàng & Thanh toán
-            <span class="wf-count" id="wf-count-sales">0</span>
-          </button>
-          <button class="sub-tab workflow-tab" data-wftype="installation">
-            <i data-lucide="wrench" style="width:14px;height:14px"></i> Lắp đặt máy
-            <span class="wf-count" id="wf-count-installation">0</span>
-          </button>
-          <button class="sub-tab workflow-tab" data-wftype="maintenance">
-            <i data-lucide="life-buoy" style="width:14px;height:14px"></i> Bảo trì kỹ thuật
-            <span class="wf-count" id="wf-count-maintenance">0</span>
-          </button>
+        <div class="kanban-toolbar">
+          <label>
+            <select class="kanban-filter" onchange="setKanbanCardTypeFilter(this.value)">
+              <option value="">Tất cả loại thẻ</option>
+              <option value="ban_may">Bán máy</option>
+              <option value="thue_may">Cho thuê máy (hợp đồng)</option>
+              <option value="thue_may_ky">Kỳ thuê</option>
+              <option value="ban_vat_tu">Bán vật tư</option>
+            </select>
+          </label>
+          <span class="kanban-total">Tổng thẻ: <strong id="kanban-total-count">0</strong></span>
         </div>
 
-        <!-- Filter Toolbar (Phase 4B2) -->
-        <div class="workflow-filter-bar">
-          <div class="filter-search">
-            <i data-lucide="search" style="width:14px;height:14px"></i>
-            <input type="text" id="wf-filter-search" placeholder="Tìm mã đơn, tên khách hàng..." />
-          </div>
-          <select id="wf-filter-priority" class="filter-select" title="Lọc theo ưu tiên">
-            <option value="">Tất cả ưu tiên</option>
-            <option value="Khẩn cấp">🔴 Khẩn cấp</option>
-            <option value="Cao">🟠 Cao</option>
-            <option value="Trung bình">🔵 Trung bình</option>
-            <option value="Thấp">⚪ Thấp</option>
-          </select>
-          <select id="wf-filter-assignee" class="filter-select" title="Lọc theo người phụ trách">
-            <option value="">Tất cả người phụ trách</option>
-            <option value="__me__">👤 Của tôi</option>
-            <option value="__none__">⊘ Chưa giao</option>
-          </select>
-          <select id="wf-filter-overdue" class="filter-select" title="Lọc theo hạn">
-            <option value="">Tất cả</option>
-            <option value="overdue">⏰ Quá hạn</option>
-            <option value="today">📅 Hôm nay</option>
-            <option value="week">📆 Trong tuần</option>
-            <option value="nodue">∅ Chưa đặt hạn</option>
-          </select>
-          <button class="btn-link-action" id="wf-clear-filters" onclick="clearWorkflowFilters()" title="Xoá tất cả bộ lọc"><i data-lucide="x" style="width:13px;height:13px"></i> Xoá bộ lọc</button>
-        </div>
-
-        <!-- Kanban Board -->
         <div id="kanban-board" class="kanban-board-grid">
-          <div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải...</div>
+          <div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải Kanban...</div>
         </div>
       </section>
 

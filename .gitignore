@@ -8,3 +8,9 @@ DATABASE_SCHEMA_V2.sql
 *.png
 test_db.js
 check_cols.js
+
+# Track 1 số .md quan trọng (override "*.md" ở trên).
+# Lưu ý: pattern "!path" chỉ hoạt động nếu cha không bị ignore.
+!CLAUDE.md
+!plans/*.md
+!archive/**/*.md

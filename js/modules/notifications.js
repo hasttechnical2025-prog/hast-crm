@@ -98,8 +98,12 @@ export async function loadNotifications() {
     (backendNotifs.items || []).forEach(n => {
       // Icon theo type
       const iconMap = {
-        workflow_assigned: 'inbox',
-        workflow_moved: 'git-branch',
+        // Kanban v2 types (spec §6.9)
+        card_assigned: 'inbox',
+        card_handoff:  'git-branch',
+        card_returned: 'rotate-ccw',
+        debt_overdue:  'alert-triangle',
+        // Other modules
         ticket_assigned: 'life-buoy',
         ticket_updated: 'life-buoy',
         customer_approved: 'user-check',
@@ -108,6 +112,8 @@ export async function loadNotifications() {
         mention: 'at-sign',
       };
       const clsMap = {
+        card_returned: 'warning',
+        debt_overdue:  'warning',
         ticket_assigned: 'warning',
         customer_rejected: 'warning',
       };
@@ -265,9 +271,10 @@ export function navigateToNotificationEntity(notif) {
   closeAllDropdowns();
   if (!notif.entityType || !notif.entityId) return;
   
-  if (notif.entityType === 'workflow') {
+  if (notif.entityType === 'kanban_card') {
+    // Kanban v2: chuông notification trỏ về thẻ trong board "workflow" tab (tên giữ nguyên)
     switchTab('workflow');
-    setTimeout(() => openWorkflowDetail(notif.entityId), 300);
+    setTimeout(() => window.openKanbanCard && window.openKanbanCard(notif.entityId), 300);
   } else if (notif.entityType === 'ticket') {
     switchTab('support');
     setTimeout(() => openTicketForm(notif.entityId), 300);

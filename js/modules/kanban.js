@@ -1,1122 +1,651 @@
+/**
+ * Kanban v2 — frontend module.
+ * Tham chiếu: plans/kanban_rebuild_spec.md §8.
+ *
+ * NGUYÊN TẮC:
+ *   - Frontend KHÔNG suy luận quyền. Server quyết: cột nào hiện, thẻ nào hiện,
+ *     field nào có. FE chỉ vẽ cái server trả.
+ *   - Cột readOnly: hiện mờ, không cho thả vào.
+ *   - Drag-drop: khi thả → gọi kanban.move. Nếu lỗi 4xx → toast + reload.
+ *   - Financials: chỉ render field có trong payload; field _modes[group]='read' → input disabled.
+ *   - Chuông 🔔: gọi kanban.notifications.list, click 1 mục → mở thẻ + đánh dấu đã đọc.
+ */
 import { state } from '../state.js';
 import { api } from '../api.js';
 import {
   toast,
   confirmDialog,
-  alertDialog,
-  promptDialog,
-  showLoading,
-  hideLoading,
   openModal,
   closeModal,
   formatDateVN,
   formatDateTimeVN,
-  formatThousands,
   formatVND,
-  formatNumber,
-  formatPhone,
-  stripPhone,
-  parseMoney,
-  parseDateVN,
-  parseDateTimeVN,
-  initDateInputs,
-  setCustomInputValue,
-  getCustomInputValue,
-  extractFormData,
+  escapeHtml,
   timeAgo,
-  escapeHtml
 } from '../utils.js';
 
-// =============================================================
-// (Function updateAdminTabVisibility cũ đã được thay thế bởi applyRoleVisibility)
-// =============================================================
+// ============================================================================
+// STATE
+// ============================================================================
 
-// ============================================================
-// =========== PHASE 4B - WORKFLOW KANBAN ======================
-// ============================================================
-
-state.workflow = {
-  currentType: 'sales',  // 'sales' | 'installation' | 'maintenance'
-  data: null,
-  filters: {  // Phase 4B2
-    search: '',
-    priority: '',
-    assignee: '',  // '' | userId | '__me__' | '__none__'
-    dueDate: '',   // '' | 'overdue' | 'today' | 'week' | 'nodue'
-  },
+state.kanban = {
+  data: null,                  // last board response
+  filterCardType: '',          // '' = tất cả, hoặc 1 trong ban_may/ban_vat_tu/thue_may/thue_may_ky
+  notifPollTimer: null,
+  config: null,                // { stages, transitions, me }
 };
 
-// Định nghĩa stages frontend (đồng bộ backend)
-const WORKFLOW_STAGES_FE = {
-  sales: [
-    { key: 'kd_processing',    label: 'Đang xử lý',          dept: 'KD',   deptClass: 'kd' },
-    { key: 'kthc_invoice',     label: 'Lên hoá đơn',         dept: 'KTHC', deptClass: 'kthc' },
-    { key: 'kthc_collecting',  label: 'Thu nợ',              dept: 'KTHC', deptClass: 'kthc' },
-    { key: 'completed',        label: 'Hoàn thành',          dept: '',     deptClass: 'done' },
-  ],
-  installation: [
-    { key: 'kd_signed',        label: 'Đã ký HĐ',            dept: 'KD',   deptClass: 'kd' },
-    { key: 'kt_installing',    label: 'Lắp đặt',             dept: 'KT',   deptClass: 'kt' },
-    { key: 'kthc_acceptance',  label: 'Nghiệm thu',          dept: 'KTHC', deptClass: 'kthc' },
-    { key: 'completed',        label: 'Hoàn thành',          dept: '',     deptClass: 'done' },
-  ],
-  maintenance: [
-    { key: 'received',         label: 'Tiếp nhận',           dept: 'KD',   deptClass: 'kd' },
-    { key: 'kt_processing',    label: 'Xử lý',               dept: 'KT',   deptClass: 'kt' },
-    { key: 'kthc_billing',     label: 'Thu phí (nếu có)',    dept: 'KTHC', deptClass: 'kthc' },
-    { key: 'completed',        label: 'Hoàn thành',          dept: '',     deptClass: 'done' },
-  ],
-};
+let _draggedCardId = null;
+let _draggedFromStage = null;
 
-/**
- * Load workflows theo type hiện tại và render Kanban
- */
-export async function loadWorkflows(options = {}) {
+// ============================================================================
+// PUBLIC: load board
+// ============================================================================
+
+export async function loadKanbanBoard(opts = {}) {
   const board = document.getElementById('kanban-board');
-  if (!options.silent) {
-    board.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải quy trình...</div>';
+  if (board && !opts.silent) {
+    board.innerHTML = '<div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải Kanban...</div>';
   }
   try {
-    // Phase 4B2: load users để hiển thị mini avatar + populate filter dropdown
-    await ensureAllUsers();
-
-    const type = state.workflow.currentType;
-    const r = await api('workflow.list', null, { workflowType: type }, options);
-    state.workflow.data = r;
-
-    // Cập nhật count badge cho type hiện tại
-    document.getElementById('wf-count-' + type).textContent = r.total || 0;
-    // Lazy load count cho 2 type còn lại
-    ['sales', 'installation', 'maintenance'].forEach(otherType => {
-      if (otherType !== type) {
-        api('workflow.list', null, { workflowType: otherType }, { silent: true })
-          .then(r2 => {
-            const el = document.getElementById('wf-count-' + otherType);
-            if (el) el.textContent = r2.total || 0;
-          })
-          .catch(() => {});
-      }
-    });
-
+    // Lazy-load config 1 lần
+    if (!state.kanban.config) {
+      state.kanban.config = await api('kanban.config.get', null, null, { silent: true });
+    }
+    const r = await api('kanban.board.get', null, { cardType: state.kanban.filterCardType || undefined }, opts);
+    state.kanban.data = r;
     renderKanbanBoard();
-
-    // Phase 4B2: bind filter events + refresh assignee options
-    bindWorkflowFilterEvents();
-    refreshAssigneeFilterOptions();
+    // Refresh notif badge ngay sau khi load board
+    refreshKanbanNotifBadge();
+    if (!state.kanban.notifPollTimer) startKanbanNotifPolling();
   } catch (e) {
-    if (!options.silent) {
+    if (board && !opts.silent) {
       board.innerHTML = `<div class="empty-state" style="grid-column:1/-1"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
     }
-    if (e.code === 'UNAUTHORIZED') { clearSession(); showLogin(); }
+    if (e.code === 'UNAUTHORIZED') { window.clearSession?.(); window.showLogin?.(); }
   }
 }
 
-/**
- * Render Kanban board từ state.workflow.data
- */
-// Phase 4B2 - Filter thời gian cho cột "Hoàn thành"
-// Lưu lựa chọn vào state để giữ giữa các lần render
-if (!state.workflow.completedFilter) state.workflow.completedFilter = 30; // mặc định 30 ngày
+// ============================================================================
+// RENDER
+// ============================================================================
 
-/**
- * Filter cards của stage 'completed' theo updatedAt trong N ngày gần đây
- * @returns {{visible: array, totalAll: number, filterDays: number|null}}
- */
-export function filterCompletedCards(allCards) {
-  const days = state.workflow.completedFilter;
-  if (!days || days === 'all') return { visible: allCards, totalAll: allCards.length, filterDays: null };
-  
-  const cutoffMs = Date.now() - (days * 24 * 60 * 60 * 1000);
-  const visible = allCards.filter(c => {
-    if (!c.updatedAt) return false;
-    const t = new Date(c.updatedAt).getTime();
-    return !isNaN(t) && t >= cutoffMs;
-  });
-  return { visible, totalAll: allCards.length, filterDays: days };
+function deptCssClass(dept) {
+  return dept === 'KD' ? 'kd' : dept === 'KT' ? 'kt' : dept === 'KTHC' ? 'kthc' : 'done';
 }
 
 export function renderKanbanBoard() {
-  const data = state.workflow.data;
-  if (!data) return;
-  
+  const data = state.kanban.data;
   const board = document.getElementById('kanban-board');
-  const stages = data.stages;
-  const grouped = data.grouped;
-  
-  // Empty state với hướng dẫn
-  if ((data.total || 0) === 0) {
-    const role = state.user?.role;
-    let hint = '';
-    if (role === 'staff') {
-      hint = 'Bạn chỉ thấy các thẻ trong stage của phòng ban bạn HOẶC do bạn tạo / được gán. Nếu không có thẻ nào, có thể chưa có công việc liên quan đến bạn.';
-    } else if (role === 'manager') {
-      hint = 'Bạn thấy tất cả thẻ có liên quan đến phòng ban bạn quản lý ở bất kỳ giai đoạn nào.';
-    }
-    board.innerHTML = `
-      <div class="empty-state" style="grid-column:1/-1;padding:40px">
-        <i data-lucide="inbox" style="width:48px;height:48px;color:var(--ink-3)"></i>
-        <p style="margin-top:12px"><strong>Không có thẻ nào trong tầm nhìn của bạn</strong></p>
-        ${hint ? `<p style="font-size:12.5px;color:var(--ink-3);max-width:500px;margin:8px auto 0">${hint}</p>` : ''}
-      </div>
-    `;
-    lucide.createIcons();
+  if (!board || !data) return;
+
+  const cols = data.columns || [];
+  if (cols.length === 0) {
+    board.innerHTML = `<div class="empty-state" style="grid-column:1/-1;padding:40px"><p><strong>Không có cột nào trong tầm nhìn của bạn</strong></p><p style="font-size:12.5px;color:var(--ink-3)">Liên hệ Trưởng phòng/Boss nếu cần được giao thẻ.</p></div>`;
     return;
   }
-  
-  // Phase 4B2: Đếm tổng số card đã filter để hiển thị
-  let totalFiltered = 0;
-  let totalRaw = 0;
-  
-  board.innerHTML = stages.map(stage => {
-    const allCards = (grouped[stage.key] && grouped[stage.key].items) || [];
-    totalRaw += allCards.length;
-    const deptClass = stage.dept === 'KD' ? 'kd' : stage.dept === 'KT' ? 'kt' : stage.dept === 'KTHC' ? 'kthc' : 'done';
-    const isCompletedColumn = stage.key === 'completed';
-    
-    // Filter cards & build header phụ với filter
-    let cards = allCards;
-    let filterControls = '';
-    let countBadge = `<div class="kanban-column-count">${allCards.length}</div>`;
-    if (isCompletedColumn) {
-      const filterResult = filterCompletedCards(allCards);
-      cards = filterResult.visible;
-      if (filterResult.filterDays) {
-        countBadge = `<div class="kanban-column-count" title="Đang hiển thị ${cards.length} trong tổng ${allCards.length}">${cards.length} / ${allCards.length}</div>`;
-      }
-      const days = state.workflow.completedFilter;
-      filterControls = `
-        <div class="kanban-completed-filter">
-          <select onchange="setCompletedFilter(this.value)" title="Lọc theo thời gian hoàn thành">
-            <option value="7" ${days==7?'selected':''}>7 ngày gần đây</option>
-            <option value="30" ${days==30?'selected':''}>30 ngày gần đây</option>
-            <option value="90" ${days==90?'selected':''}>90 ngày gần đây</option>
-            <option value="all" ${days==='all'?'selected':''}>Tất cả</option>
-          </select>
-          ${allCards.length > cards.length ? `<button class="link-btn" onclick="openCompletedHistory()" title="Xem toàn bộ lịch sử"><i data-lucide="archive" style="width:12px;height:12px"></i> Xem tất cả</button>` : ''}
+
+  // Tổng số thẻ
+  let totalCards = 0;
+  cols.forEach((c) => { totalCards += (c.cards || []).length; });
+
+  board.innerHTML = cols.map((col) => renderColumn(col)).join('');
+  if (window.lucide) window.lucide.createIcons();
+
+  // Cập nhật badge tổng
+  const counter = document.getElementById('kanban-total-count');
+  if (counter) counter.textContent = totalCards;
+}
+
+function renderColumn(col) {
+  const stage = col.stage;
+  const cards = col.cards || [];
+  const deptCls = deptCssClass(stage.ownerDept);
+  const readOnlyAttr = col.readOnly ? 'data-readonly="true"' : '';
+  const readOnlyCls = col.readOnly ? 'kanban-column--readonly' : '';
+  return `
+    <div class="kanban-column ${readOnlyCls}" ${readOnlyAttr}>
+      <div class="kanban-column-header">
+        <div class="kanban-column-title">
+          <span class="dept-tag ${deptCls}">${escapeHtml(stage.ownerDept || '')}</span>
+          ${escapeHtml(stage.name)}
         </div>
-      `;
-    }
-    
-    // Phase 4B2: Apply Kanban-wide filters (search, priority, assignee, dueDate)
-    const filteredCards = applyWorkflowFilters(cards);
-    totalFiltered += filteredCards.length;
-    const hasFilter = hasActiveFilters();
-    
-    // Cập nhật count badge khi có filter
-    if (hasFilter && !isCompletedColumn) {
-      countBadge = `<div class="kanban-column-count" title="${filteredCards.length} hiển thị / ${allCards.length} tổng">${filteredCards.length} / ${allCards.length}</div>`;
-    }
-    
-    return `
-      <div class="kanban-column">
-        <div class="kanban-column-header">
-          <div class="kanban-column-title">
-            ${stage.dept ? `<span class="dept-tag ${deptClass}">${stage.dept}</span>` : `<span class="dept-tag done">✓</span>`}
-            ${escapeHtml(stage.label)}
-          </div>
-          ${countBadge}
-        </div>
-        ${filterControls}
-        <div class="kanban-column-body" data-stage-key="${stage.key}" ondragover="kanbanDragOver(event)" ondragleave="kanbanDragLeave(event)" ondrop="kanbanDrop(event)">
-          ${filteredCards.length === 0 ? `<div class="kanban-empty">${hasFilter ? 'Không có thẻ phù hợp với bộ lọc' : (isCompletedColumn && allCards.length > 0 ? 'Không có thẻ trong khoảng thời gian này' : 'Không có thẻ nào')}</div>` : 
-            filteredCards.map(card => renderKanbanCard(card, stage)).join('')}
-        </div>
+        <div class="kanban-column-count">${cards.length}</div>
       </div>
-    `;
-  }).join('');
-  lucide.createIcons();
-  
-  // Phase 4B2: hiển thị message nếu filter ẩn hết
-  if (hasActiveFilters() && totalFiltered === 0 && totalRaw > 0) {
-    // Đã có UI empty trong từng cột rồi, không cần làm gì thêm
-  }
-}
-
-// ============================================================
-// PHASE 4B2 - WORKFLOW FILTERS
-// ============================================================
-
-/**
- * Check có filter nào đang active không
- */
-export function hasActiveFilters() {
-  const f = state.workflow.filters;
-  return !!(f.search || f.priority || f.assignee || f.dueDate);
-}
-
-/**
- * Apply tất cả filter lên 1 mảng cards
- */
-export function applyWorkflowFilters(cards) {
-  const f = state.workflow.filters;
-  if (!hasActiveFilters()) return cards;
-  
-  const me = state.user?.id;
-  const now = new Date();
-  const todayStr = now.toISOString().substring(0, 10);
-  const weekAhead = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
-  
-  // Search lowercase 1 lần
-  const searchLower = f.search ? f.search.toLowerCase().trim() : '';
-  
-  return cards.filter(card => {
-    // Search trong: entityCode, customerName, customerCode, entitySubject
-    if (searchLower) {
-      const haystack = [
-        card.entityCode || '',
-        card.customerName || '',
-        card.customerCode || '',
-        card.entitySubject || '',
-      ].join(' ').toLowerCase();
-      if (!haystack.includes(searchLower)) return false;
-    }
-    
-    // Priority
-    if (f.priority && card.priority !== f.priority) return false;
-    
-    // Assignee
-    if (f.assignee) {
-      if (f.assignee === '__me__') {
-        if (card.assignedTo !== me) return false;
-      } else if (f.assignee === '__none__') {
-        if (card.assignedTo) return false;
-      } else {
-        if (card.assignedTo !== f.assignee) return false;
-      }
-    }
-    
-    // Due date
-    if (f.dueDate) {
-      const due = card.dueDate;
-      if (f.dueDate === 'nodue') {
-        if (due) return false;
-      } else if (!due) {
-        return false; // các filter khác cần có dueDate
-      } else {
-        const dueStr = String(due).substring(0, 10);
-        if (f.dueDate === 'overdue') {
-          if (dueStr >= todayStr) return false;
-        } else if (f.dueDate === 'today') {
-          if (dueStr !== todayStr) return false;
-        } else if (f.dueDate === 'week') {
-          const dueDate = new Date(dueStr);
-          if (dueDate < now || dueDate > weekAhead) return false;
-        }
-      }
-    }
-    
-    return true;
-  });
-}
-
-/**
- * Xoá tất cả filter
- */
-export function clearWorkflowFilters() {
-  state.workflow.filters = { search: '', priority: '', assignee: '', dueDate: '' };
-  document.getElementById('wf-filter-search').value = '';
-  document.getElementById('wf-filter-priority').value = '';
-  document.getElementById('wf-filter-assignee').value = '';
-  document.getElementById('wf-filter-overdue').value = '';
-  renderKanbanBoard();
-}
-
-/**
- * Cập nhật assignee dropdown với danh sách user thực tế từ data
- */
-export function refreshAssigneeFilterOptions() {
-  const sel = document.getElementById('wf-filter-assignee');
-  if (!sel) return;
-  const data = state.workflow.data;
-  if (!data) return;
-  
-  // Collect tất cả assignedTo unique từ data
-  const assigneeIds = new Set();
-  Object.values(data.grouped || {}).forEach(g => {
-    (g.items || []).forEach(card => {
-      if (card.assignedTo) assigneeIds.add(card.assignedTo);
-    });
-  });
-  
-  const userMap = {};
-  (state.allUsers || []).forEach(u => { userMap[u.id] = u; });
-  
-  const currentVal = sel.value;
-  let optionsHtml = `
-    <option value="">Tất cả người phụ trách</option>
-    <option value="__me__">👤 Của tôi</option>
-    <option value="__none__">⊘ Chưa giao</option>
+      <div class="kanban-column-body"
+           data-stage-id="${escapeHtml(stage.id)}"
+           data-readonly="${col.readOnly ? '1' : '0'}"
+           ondragover="kanbanDragOver(event)"
+           ondragleave="kanbanDragLeave(event)"
+           ondrop="kanbanDrop(event)">
+        ${cards.length === 0
+          ? '<div class="kanban-empty">Không có thẻ nào</div>'
+          : cards.map((card) => renderCard(card, col.readOnly)).join('')}
+      </div>
+    </div>
   `;
-  Array.from(assigneeIds).forEach(uid => {
-    const u = userMap[uid];
-    if (u) optionsHtml += `<option value="${escapeHtml(uid)}">${escapeHtml(u.fullName || u.username)}</option>`;
-  });
-  sel.innerHTML = optionsHtml;
-  if (currentVal) sel.value = currentVal;
 }
 
-// Bind events cho filter inputs (one-time)
-let _workflowFiltersBound = false;
-export function bindWorkflowFilterEvents() {
-  if (_workflowFiltersBound) return;
-  _workflowFiltersBound = true;
-  
-  const searchInput = document.getElementById('wf-filter-search');
-  if (searchInput) {
-    searchInput.addEventListener('input', debounce(e => {
-      state.workflow.filters.search = e.target.value;
-      renderKanbanBoard();
-    }, 250));
-  }
-  document.getElementById('wf-filter-priority')?.addEventListener('change', e => {
-    state.workflow.filters.priority = e.target.value;
-    renderKanbanBoard();
-  });
-  document.getElementById('wf-filter-assignee')?.addEventListener('change', e => {
-    state.workflow.filters.assignee = e.target.value;
-    renderKanbanBoard();
-  });
-  document.getElementById('wf-filter-overdue')?.addEventListener('change', e => {
-    state.workflow.filters.dueDate = e.target.value;
-    renderKanbanBoard();
-  });
+function renderCard(card, columnReadOnly) {
+  const fin = card.financials || null;
+  const modes = (fin && fin._modes) || {};
+  const cardTypeLabel = ({
+    ban_may: 'Bán máy',
+    thue_may: 'Cho thuê máy',
+    thue_may_ky: 'Kỳ thuê',
+    ban_vat_tu: 'Bán vật tư',
+  })[card.cardType] || card.cardType;
+
+  const cardClass = `kanban-card kanban-card--${card.cardType} ${columnReadOnly ? 'kanban-card--readonly' : ''}`;
+  // Draggable nếu cột không read-only và status active
+  const draggable = !columnReadOnly && card.status === 'active';
+  const dragAttrs = draggable
+    ? `draggable="true" ondragstart="kanbanDragStart(event,'${card.id}','${card.currentStage}')" ondragend="kanbanDragEnd(event)"`
+    : '';
+
+  const totalAmount = fin && (fin.total_amount ?? fin.totalAmount);
+  const paymentStatus = fin && (fin.payment_status ?? fin.paymentStatus);
+  const dueDate = fin && (fin.due_date ?? fin.dueDate);
+
+  return `
+    <div class="${cardClass}" data-card-id="${card.id}" ${dragAttrs} onclick="openKanbanCard('${card.id}')">
+      <div class="kanban-card-header">
+        <span class="kanban-card-type">${escapeHtml(cardTypeLabel)}</span>
+        ${card.assignedTo ? `<span class="kanban-card-assignee" title="Đã giao"><i data-lucide="user" style="width:11px;height:11px"></i></span>` : ''}
+      </div>
+      <div class="kanban-card-title">${escapeHtml(card.title || '(không tiêu đề)')}</div>
+      ${card.customerName ? `<div class="kanban-card-customer">${escapeHtml(card.customerName)}</div>` : ''}
+      ${card.periodLabel ? `<div class="kanban-card-period"><i data-lucide="calendar" style="width:11px;height:11px"></i> ${escapeHtml(card.periodLabel)}</div>` : ''}
+      ${totalAmount != null ? `<div class="kanban-card-amount">${formatVND(totalAmount)}</div>` : ''}
+      ${paymentStatus ? `<div class="kanban-card-paystatus paystatus--${paymentStatus}">${escapeHtml(paymentStatus)}</div>` : ''}
+      ${dueDate ? `<div class="kanban-card-meta"><i data-lucide="clock" style="width:11px;height:11px"></i> ${formatDateVN(dueDate)}</div>` : ''}
+    </div>
+  `;
 }
 
-// ============================================================
-// PHASE 4B2 - DRAG & DROP KANBAN
-// ============================================================
+// ============================================================================
+// DRAG & DROP
+// ============================================================================
 
-let _draggedCard = null;  // {id, currentStage, canMove}
-
-export function kanbanDragStart(event, cardData) {
-  _draggedCard = cardData;
+export function kanbanDragStart(event, cardId, fromStage) {
+  _draggedCardId = cardId;
+  _draggedFromStage = fromStage;
   event.dataTransfer.effectAllowed = 'move';
-  event.dataTransfer.setData('text/plain', cardData.id);
-  event.target.classList.add('dragging');
+  event.dataTransfer.setData('text/plain', cardId);
+  event.currentTarget.classList.add('dragging');
 }
 
 export function kanbanDragEnd(event) {
-  event.target.classList.remove('dragging');
-  // Clear all drop-over states
-  document.querySelectorAll('.kanban-column-body.drag-over, .kanban-column-body.drag-forbidden').forEach(el => {
-    el.classList.remove('drag-over', 'drag-forbidden');
-  });
-  _draggedCard = null;
+  event.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.kanban-column-body.drag-over,.kanban-column-body.drag-forbidden')
+    .forEach((el) => el.classList.remove('drag-over', 'drag-forbidden'));
+  _draggedCardId = null;
+  _draggedFromStage = null;
 }
 
 export function kanbanDragOver(event) {
-  if (!_draggedCard) return;
+  if (!_draggedCardId) return;
   event.preventDefault();
-  
-  const targetStage = event.currentTarget.dataset.stageKey;
-  const sourceStage = _draggedCard.currentStage;
-  
-  // Clear other columns' drag-over
-  document.querySelectorAll('.kanban-column-body').forEach(el => {
-    if (el !== event.currentTarget) el.classList.remove('drag-over', 'drag-forbidden');
+  const body = event.currentTarget;
+  const targetStage = body.dataset.stageId;
+  const readonly = body.dataset.readonly === '1';
+
+  document.querySelectorAll('.kanban-column-body').forEach((el) => {
+    if (el !== body) el.classList.remove('drag-over', 'drag-forbidden');
   });
-  
-  // Same column → no effect
-  if (targetStage === sourceStage) {
-    event.currentTarget.classList.remove('drag-over', 'drag-forbidden');
+
+  if (readonly || targetStage === _draggedFromStage) {
+    body.classList.add('drag-forbidden');
+    body.classList.remove('drag-over');
     event.dataTransfer.dropEffect = 'none';
     return;
   }
-  
-  // Check permission
-  if (!_draggedCard.canMove) {
-    event.currentTarget.classList.add('drag-forbidden');
-    event.dataTransfer.dropEffect = 'none';
-    return;
-  }
-  
-  event.currentTarget.classList.add('drag-over');
+  body.classList.add('drag-over');
+  body.classList.remove('drag-forbidden');
   event.dataTransfer.dropEffect = 'move';
 }
 
 export function kanbanDragLeave(event) {
-  // Chỉ clear khi rời hẳn element, không phải khi vào element con
   if (event.currentTarget.contains(event.relatedTarget)) return;
   event.currentTarget.classList.remove('drag-over', 'drag-forbidden');
 }
 
 export async function kanbanDrop(event) {
   event.preventDefault();
-  if (!_draggedCard) return;
-  
-  const targetStage = event.currentTarget.dataset.stageKey;
-  const sourceStage = _draggedCard.currentStage;
-  const cardId = _draggedCard.id;
-  const canMove = _draggedCard.canMove;
-  
-  event.currentTarget.classList.remove('drag-over', 'drag-forbidden');
-  
-  if (targetStage === sourceStage) { _draggedCard = null; return; }
-  if (!canMove) { 
-    _draggedCard = null;
-    toast('Bạn không có quyền chuyển thẻ này', 'error'); 
-    return; 
+  if (!_draggedCardId) return;
+
+  const body = event.currentTarget;
+  body.classList.remove('drag-over', 'drag-forbidden');
+  const targetStage = body.dataset.stageId;
+  const readonly = body.dataset.readonly === '1';
+  const cardId = _draggedCardId;
+  const fromStage = _draggedFromStage;
+
+  _draggedCardId = null;
+  _draggedFromStage = null;
+
+  if (readonly) {
+    toast('Cột này là read-only, không thể thả vào.', 'error');
+    return;
   }
-  
-  // Tìm stage object để biết label
-  const stages = WORKFLOW_STAGES_FE[state.workflow.currentType] || [];
-  const targetStageObj = stages.find(s => s.key === targetStage);
-  const stageLabel = targetStageObj ? targetStageObj.label : targetStage;
-  
-  _draggedCard = null;
-  
-  // Confirm
-  const ok = await confirmDialog({
-    title: 'Chuyển sang giai đoạn',
-    message: `Chuyển thẻ sang "<strong>${escapeHtml(stageLabel)}</strong>"?<br><br>Hành động này sẽ ghi lại lịch sử và thông báo cho phòng ban liên quan.`,
-    type: 'info',
-    okText: 'Chuyển',
-  });
-  if (!ok) return;
-  
-  // Optimistic UI: move card ngay trong DOM
+  if (targetStage === fromStage) return;
+
+  // Optimistic UI: move DOM ngay
   const cardEl = document.querySelector(`.kanban-card[data-card-id="${cardId}"]`);
-  const targetBody = event.currentTarget;
-  if (cardEl && targetBody) {
-    targetBody.appendChild(cardEl);
-    // Xoá "empty" placeholder nếu có
-    targetBody.querySelectorAll('.kanban-empty').forEach(e => e.remove());
-  }
-  
+  if (cardEl) body.appendChild(cardEl);
+
   try {
-    await api('workflow.moveStage', { id: cardId, newStage: targetStage });
-    toast(`Đã chuyển sang "${stageLabel}"`, 'success');
-    // Reload để cập nhật count + history
-    loadWorkflows();
+    await api('kanban.move', { cardId, toStage: targetStage });
+    toast('Đã chuyển stage', 'success');
+    loadKanbanBoard({ silent: true });
   } catch (e) {
-    toast(e.message, 'error');
-    // Rollback: reload để restore state
-    loadWorkflows();
+    toast(e.message || 'Không chuyển được', 'error');
+    loadKanbanBoard({ silent: true }); // rollback bằng cách reload
   }
 }
 
+// ============================================================================
+// CARD DRAWER (chi tiết + sửa)
+// ============================================================================
 
-/**
- * Đổi filter thời gian cho cột Hoàn thành
- */
-export function setCompletedFilter(value) {
-  state.workflow.completedFilter = value === 'all' ? 'all' : parseInt(value, 10);
-  renderKanbanBoard();
-}
-
-/**
- * Mở modal hiển thị toàn bộ lịch sử Hoàn thành (kèm search)
- */
-export function openCompletedHistory() {
-  const data = state.workflow.data;
-  if (!data) return;
-  const allCompleted = (data.grouped['completed']?.items) || [];
-  
-  // Tạo modal nếu chưa có
-  let modal = document.getElementById('modal-completed-history');
-  if (!modal) {
-    document.body.insertAdjacentHTML('beforeend', `
-      <div class="modal-backdrop" id="modal-completed-history">
-        <div class="modal" style="max-width:760px">
-          <div class="modal-header">
-            <h3><i data-lucide="archive" style="width:20px;height:20px;display:inline;vertical-align:middle"></i> Lịch sử quy trình đã hoàn thành</h3>
-            <button class="modal-close" onclick="closeModal('modal-completed-history')"><i data-lucide="x" style="width:18px;height:18px"></i></button>
-          </div>
-          <div class="modal-body">
-            <input type="text" id="completed-history-search" placeholder="🔍 Tìm theo mã, tên KH..." style="width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:6px;margin-bottom:12px;font-size:13px" />
-            <div id="completed-history-list" style="max-height:60vh;overflow-y:auto"></div>
-          </div>
-        </div>
-      </div>
-    `);
-    lucide.createIcons();
-  }
-  
-  const renderList = (searchTerm) => {
-    const term = (searchTerm || '').toLowerCase().trim();
-    const filtered = !term ? allCompleted : allCompleted.filter(c => {
-      const hay = `${c.entityCode||''} ${c.customerName||''} ${c.customerCode||''} ${c.code||''}`.toLowerCase();
-      return hay.includes(term);
-    });
-    const listEl = document.getElementById('completed-history-list');
-    if (filtered.length === 0) {
-      listEl.innerHTML = '<div class="empty-state"><p>Không tìm thấy</p></div>';
-      return;
-    }
-    listEl.innerHTML = `
-      <table class="data-table" style="font-size:12.5px">
-        <thead><tr><th>Mã đơn</th><th>Khách hàng</th><th>Ngày hoàn thành</th><th>Giá trị</th><th></th></tr></thead>
-        <tbody>
-          ${filtered.map(c => `
-            <tr style="cursor:pointer" onclick="closeModal('modal-completed-history');setTimeout(()=>openWorkflowDetail('${c.id}'),200)">
-              <td><span class="code">${escapeHtml(c.entityCode||'-')}</span></td>
-              <td>${escapeHtml(c.customerName||'-')}</td>
-              <td>${formatDateVN(c.updatedAt)}</td>
-              <td class="text-right">${c.totalAmount ? formatShortMoney(c.totalAmount) : '-'}</td>
-              <td><i data-lucide="chevron-right" style="width:14px;height:14px;color:var(--ink-3)"></i></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
-    lucide.createIcons();
-  };
-  
-  document.getElementById('completed-history-search').oninput = (e) => renderList(e.target.value);
-  renderList('');
-  openModal('modal-completed-history');
-}
-
-/**
- * Render 1 card trong Kanban
- */
-export function renderKanbanCard(card, stage) {
-  // Dùng thông tin customer trực tiếp từ backend (đã filter quyền)
-  const custName = card.customerName || '-';
-  const custCode = card.customerCode || '';
-  const isCustDeleted = custName === '(Khách hàng đã xoá)';
-  
-  const priorityClass = card.priority === 'Khẩn cấp' ? 'priority-urgent' : 
-                        card.priority === 'Cao' ? 'priority-high' : 
-                        card.priority === 'Thấp' ? 'priority-low' : '';
-  
-  // Stages của workflow type hiện tại để xác định prev/next
-  const allStages = WORKFLOW_STAGES_FE[state.workflow.currentType] || [];
-  const currentIdx = allStages.findIndex(s => s.key === card.currentStage);
-  const prevStage = currentIdx > 0 ? allStages[currentIdx - 1] : null;
-  const nextStage = currentIdx >= 0 && currentIdx < allStages.length - 1 ? allStages[currentIdx + 1] : null;
-  
-  // Tiêu đề
-  let titleText = '';
-  if (card.entityType === 'ticket') {
-    titleText = card.entitySubject || custName;
-  } else if (card.productNames && card.productNames.length > 0) {
-    titleText = card.productNames.slice(0, 2).join(', ') + (card.productNames.length > 2 ? '...' : '');
-  } else {
-    titleText = custName;
-  }
-  
-  // Meta-right: tiền (nếu được phép xem) HOẶC priority
-  let metaRight = '';
-  if (card.totalAmount !== null && card.totalAmount !== undefined && card.totalAmount > 0) {
-    metaRight = `<span class="kanban-card-amount">${formatShortMoney(card.totalAmount)}</span>`;
-  } else if (card.priority) {
-    metaRight = `<span>${priorityBadge(card.priority)}</span>`;
-  }
-  
-  // Phase 4B2: Due date badge
-  const dueDateBadge = renderDueDateBadge(card.dueDate);
-  
-  // Phase 4B2: Assignee mini avatar
-  let assigneeMini = '';
-  if (card.assignedTo) {
-    const userMap = {};
-    (state.allUsers || []).forEach(u => { userMap[u.id] = u; });
-    const u = userMap[card.assignedTo];
-    if (u) {
-      const initial = (u.fullName || u.username || '?').charAt(0).toUpperCase();
-      assigneeMini = `<span class="card-assignee-mini" title="Phụ trách: ${escapeHtml(u.fullName || u.username)}"><span class="mini-avatar">${escapeHtml(initial)}</span></span>`;
-    }
-  }
-  
-  // Actions: chỉ hiện nếu có quyền chuyển
-  const actions = !card.canMove ? '' : `
-    <div class="kanban-card-actions">
-      ${prevStage ? `<button class="btn-prev" onclick="event.stopPropagation();moveWorkflowStage('${card.id}','${prevStage.key}','${escapeHtml(prevStage.label).replace(/'/g,'')}')" title="Trả lại ${prevStage.dept}">← ${escapeHtml(prevStage.dept || '')}</button>` : ''}
-      ${nextStage ? `<button onclick="event.stopPropagation();moveWorkflowStage('${card.id}','${nextStage.key}','${escapeHtml(nextStage.label).replace(/'/g,'')}')" title="Chuyển sang ${nextStage.label}">${escapeHtml(nextStage.dept || 'Hoàn tất')} →</button>` : ''}
-    </div>
-  `;
-  
-  // Phase 4B2: drag attrs - only if canMove
-  const dragAttrs = card.canMove ? 
-    `draggable="true" ondragstart="kanbanDragStart(event, {id:'${card.id}', currentStage:'${card.currentStage}', canMove:true})" ondragend="kanbanDragEnd(event)"` : 
-    'class-extra="no-drag"';
-  const dragClass = card.canMove ? '' : 'no-drag';
-  const dragHint = card.canMove ? '<span class="drag-handle-hint">⠿ Kéo</span>' : '';
-  
-  return `
-    <div class="kanban-card ${priorityClass} ${dragClass}" data-card-id="${card.id}" ${dragAttrs} onclick="openWorkflowDetail('${card.id}')">
-      ${dragHint}
-      <div class="kanban-card-header">
-        <span class="kanban-card-code">${escapeHtml(card.entityCode || '')}</span>
-        <span style="display:flex;gap:4px;align-items:center">
-          ${card.customerClassification === 'VIP' ? '<span class="badge-pill vip" style="font-size:9px;padding:1px 5px">VIP</span>' : ''}
-          ${assigneeMini}
-        </span>
-      </div>
-      <div class="kanban-card-title">${escapeHtml(titleText)}</div>
-      <div class="kanban-card-customer">
-        ${isCustDeleted 
-          ? '<span class="text-muted" style="font-style:italic">' + escapeHtml(custName) + '</span>' 
-          : '<strong>' + escapeHtml(custName) + '</strong>'}
-        ${custCode ? '<span style="font-size:10.5px;color:var(--ink-3);margin-left:4px">·' + escapeHtml(custCode) + '</span>' : ''}
-      </div>
-      ${dueDateBadge ? `<div style="margin-top:6px">${dueDateBadge}</div>` : ''}
-      <div class="kanban-card-meta">
-        <span>${formatDateVN(card.updatedAt)}</span>
-        ${metaRight}
-      </div>
-      ${actions}
-    </div>
-  `;
-}
-
-/**
- * Render due date badge với màu theo tình trạng:
- * - Quá hạn: đỏ
- * - Hôm nay: xanh dương
- * - Trong 3 ngày: vàng
- * - Còn xa: trung tính
- */
-export function renderDueDateBadge(dueDate) {
-  if (!dueDate) return '';
-  
-  let dueDateOnly;
-  if (typeof dueDate === 'string') {
-    dueDateOnly = dueDate.substring(0, 10);
-  } else {
-    return '';
-  }
-  
-  const dueObj = new Date(dueDateOnly);
-  if (isNaN(dueObj.getTime())) return '';
-  
-  const now = new Date();
-  const todayObj = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const diffDays = Math.round((dueObj - todayObj) / (1000 * 60 * 60 * 24));
-  
-  let cls = '';
-  let label = '';
-  let icon = 'clock';
-  if (diffDays < 0) {
-    cls = 'due-overdue';
-    icon = 'alert-circle';
-    label = `Quá hạn ${Math.abs(diffDays)} ngày`;
-  } else if (diffDays === 0) {
-    cls = 'due-today';
-    icon = 'calendar';
-    label = 'Hết hạn hôm nay';
-  } else if (diffDays <= 3) {
-    cls = 'due-soon';
-    icon = 'calendar';
-    label = `Còn ${diffDays} ngày`;
-  } else {
-    cls = '';
-    icon = 'calendar';
-    label = formatDateVN(dueDateOnly);
-  }
-  
-  return `<span class="due-date-badge ${cls}" title="Hạn: ${formatDateVN(dueDateOnly)}"><i data-lucide="${icon}"></i>${escapeHtml(label)}</span>`;
-}
-
-/**
- * Chuyển workflow sang stage mới
- */
-export async function moveWorkflowStage(workflowId, newStageKey, newStageLabel) {
-  if (!(await confirmDialog({ title: 'Xác nhận', message: `Chuyển sang giai đoạn "${newStageLabel}"?\n\nHành động này sẽ ghi lại lịch sử và thông báo cho phòng ban liên quan.`, type: 'warning' }))) return;
-  try {
-    await api('workflow.moveStage', { id: workflowId, newStage: newStageKey });
-    toast(`Đã chuyển sang "${newStageLabel}"`, 'success');
-    loadWorkflows();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-/**
- * Mở drawer chi tiết workflow
- */
-export async function openWorkflowDetail(workflowId) {
-  // Tạo drawer detail dynamically nếu chưa có
-  let drawer = document.getElementById('drawer-workflow-detail');
+export async function openKanbanCard(cardId) {
+  let drawer = document.getElementById('drawer-kanban-card');
   if (!drawer) {
     document.body.insertAdjacentHTML('beforeend', `
-      <div class="drawer" id="drawer-workflow-detail">
+      <div class="drawer" id="drawer-kanban-card">
         <div class="drawer-header">
           <div>
-            <h3 id="wfd-title">Chi tiết quy trình</h3>
-            <div class="drawer-sub" id="wfd-sub"></div>
+            <h3 id="kbd-title">Chi tiết thẻ</h3>
+            <div class="drawer-sub" id="kbd-sub"></div>
           </div>
-          <button class="modal-close" onclick="closeAllDrawers()"><i data-lucide="x" style="width:18px;height:18px"></i></button>
+          <button class="modal-close" onclick="closeAllDrawers && closeAllDrawers()"><i data-lucide="x" style="width:18px;height:18px"></i></button>
         </div>
-        <div class="drawer-body" id="wfd-body">
+        <div class="drawer-body" id="kbd-body">
           <div class="empty-state"><div class="spinner dark"></div> Đang tải...</div>
         </div>
         <div class="drawer-footer">
-          <button type="button" class="btn btn-ghost" onclick="closeAllDrawers()">Đóng</button>
-          <button type="button" class="btn btn-outline" id="wfd-open-entity"><i data-lucide="external-link" style="width:14px;height:14px"></i> Mở Đơn/Ticket</button>
+          <button type="button" class="btn btn-ghost" onclick="closeAllDrawers && closeAllDrawers()">Đóng</button>
+          <button type="button" class="btn btn-primary" id="kbd-save-btn" onclick="saveKanbanCardEdits()">Lưu thay đổi</button>
         </div>
       </div>
     `);
-    drawer = document.getElementById('drawer-workflow-detail');
-    lucide.createIcons();
+    if (window.lucide) window.lucide.createIcons();
   }
-  
-  openDrawer('drawer-workflow-detail');
-  document.getElementById('wfd-body').innerHTML = '<div class="empty-state"><div class="spinner dark"></div> Đang tải...</div>';
-  
+  window.openDrawer && window.openDrawer('drawer-kanban-card');
+  document.getElementById('kbd-body').innerHTML = '<div class="empty-state"><div class="spinner dark"></div> Đang tải...</div>';
+
   try {
-    const r = await api('workflow.get', null, { id: workflowId });
-    const wf = r.workflow;
-    const entity = r.entity;
-    const customer = r.customer;  // Đã filter theo role ở backend
-    const history = r.history || [];
-    const orderItems = r.orderItems || [];
-    
-    const wfTypeLabel = { sales: 'Bán hàng', installation: 'Lắp đặt', maintenance: 'Bảo trì' }[wf.workflowType] || wf.workflowType;
-    const stages = WORKFLOW_STAGES_FE[wf.workflowType] || [];
-    const currentStage = stages.find(s => s.key === wf.currentStage);
-    
-    document.getElementById('wfd-title').textContent = `${wfTypeLabel} - ${wf.code}`;
-    document.getElementById('wfd-sub').textContent = `${entity ? entity.code : ''} · ${customer ? customer.name : '(KH đã xoá)'}`;
-    
-    // Nút mở entity - chỉ hiện cho admin/manager (staff KT không cần thiết)
-    const openBtn = document.getElementById('wfd-open-entity');
-    const role = state.user?.role;
-    if (role === 'admin' || role === 'manager' || role === 'boss') {
-      openBtn.style.display = '';
-      openBtn.onclick = () => {
-        closeAllDrawers();
-        setTimeout(() => {
-          if (wf.entityType === 'order') {
-            document.querySelector('.tab[data-tab="sales"]').click();
-            setTimeout(() => {
-              document.querySelector('[data-panel="sales"] .sub-tab[data-subtab="orders"]').click();
-              setTimeout(() => openOrderForm(wf.entityId), 200);
-            }, 200);
-          } else if (wf.entityType === 'ticket') {
-            document.querySelector('.tab[data-tab="support"]').click();
-            setTimeout(() => openTicketForm(wf.entityId), 300);
-          }
-        }, 200);
-      };
-    } else {
-      openBtn.style.display = 'none';
-    }
-    
-    // Render timeline history
-    let timelineHtml = '<div class="timeline">';
-    history.slice().reverse().forEach((h, idx) => {
-      const isLatest = idx === 0;
-      const stageObj = stages.find(s => s.key === h.toStage);
-      const stageLabel = stageObj ? stageObj.label : h.toStage;
-      const deptLabel = h.toDept || (stageObj ? stageObj.dept : '');
-      timelineHtml += `
-        <div class="timeline-item ${isLatest?'latest':''}">
-          <div class="timeline-item-time">${formatDateTimeVN(h.timestamp)}</div>
-          <div class="timeline-item-title">
-            ${h.fromStage ? `<span style="color:var(--ink-3)">${escapeHtml(h.fromDept||'')} →</span> ` : ''}
-            <strong>${escapeHtml(deptLabel)}: ${escapeHtml(stageLabel)}</strong>
-          </div>
-          <div class="timeline-item-meta">
-            Người chuyển: <strong>${escapeHtml(h.userName || '')}</strong>
-          </div>
-          ${h.note ? `<div class="timeline-item-note">${escapeHtml(h.note)}</div>` : ''}
-        </div>
-      `;
-    });
-    timelineHtml += '</div>';
-    
-    // Render customer info card (chỉ field nào backend trả về - đã filter quyền)
-    let customerCard = '';
-    if (customer) {
-      customerCard = `
-        <div class="detail-card" style="margin-bottom:14px">
-          <h4>Khách hàng</h4>
-          <div class="detail-row"><div class="label">Tên KH</div><div class="value"><strong>${escapeHtml(customer.name)}</strong> ${customer.classification === 'VIP' ? '<span class="badge-pill vip" style="margin-left:6px">VIP</span>' : ''}</div></div>
-          ${customer.code ? `<div class="detail-row"><div class="label">Mã KH</div><div class="value">${escapeHtml(customer.code)}</div></div>` : ''}
-          ${customer.address ? `<div class="detail-row"><div class="label">Địa chỉ</div><div class="value">${escapeHtml(customer.address)}</div></div>` : ''}
-          ${customer.phone ? `<div class="detail-row"><div class="label">Điện thoại</div><div class="value">${formatPhone(customer.phone)}</div></div>` : ''}
-          ${customer.email ? `<div class="detail-row"><div class="label">Email</div><div class="value">${escapeHtml(customer.email)}</div></div>` : ''}
-          ${customer.taxCode ? `<div class="detail-row"><div class="label">MST</div><div class="value">${escapeHtml(customer.taxCode)}</div></div>` : ''}
-        </div>
-      `;
-    }
-    
-    // Order items (chỉ cho order workflow)
-    let itemsCard = '';
-    if (orderItems.length > 0) {
-      const showPrice = orderItems[0].unitPrice !== undefined;  // Có price = không phải staff KT
-      itemsCard = `
-        <div class="detail-card" style="margin-bottom:14px">
-          <h4>Hàng hoá / Dịch vụ (${orderItems.length})</h4>
-          <table class="data-table" style="margin-top:6px">
-            <thead><tr>
-              <th>Sản phẩm</th>
-              <th class="text-right">SL</th>
-              <th>ĐVT</th>
-              ${showPrice ? '<th class="text-right">Đơn giá</th><th class="text-right">Thành tiền</th>' : ''}
-            </tr></thead>
-            <tbody>
-              ${orderItems.map(it => `
-                <tr>
-                  <td>${escapeHtml(it.productName || '-')}</td>
-                  <td class="text-right">${escapeHtml(String(it.quantity || 0))}</td>
-                  <td>${escapeHtml(it.unit || '')}</td>
-                  ${showPrice ? `<td class="text-right">${formatVND(it.unitPrice || 0)}</td><td class="text-right"><strong>${formatVND(it.lineTotal || 0)}</strong></td>` : ''}
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
-    }
-    
-    // Phase 4B3: Build assignment card (edit inline assignedTo + dueDate + priority)
-    const userMap = {};
-    (state.allUsers || []).forEach(u => { userMap[u.id] = u; });
-    const assignee = wf.assignedTo ? userMap[wf.assignedTo] : null;
-    const assigneeName = assignee ? (assignee.fullName || assignee.username) : '';
-    const dueLabel = wf.dueDate ? renderDueDateBadge(wf.dueDate) : '';
-    const dueRawDate = wf.dueDate ? String(wf.dueDate).substring(0, 10) : '';
-    
-    // Quyền chỉnh sửa: chỉ user có canMove mới được sửa assignment
-    const canEditAssignment = r.canMove === true;
-    
-    let assignmentCard = '';
-    if (wf.status !== 'completed') {
-      assignmentCard = `
-        <div class="assignment-card">
-          <h4><i data-lucide="user-cog" style="width:14px;height:14px"></i> Phân công & Hạn hoàn thành</h4>
-          
-          <div class="assignment-row" id="wf-assign-row-assignedTo">
-            <div class="label">Người phụ trách</div>
-            <div>
-              <div class="value-display ${!assigneeName ? 'empty' : ''}">${assigneeName ? escapeHtml(assigneeName) : 'Chưa giao'}</div>
-              <div class="value-edit">
-                <select id="wf-edit-assignedTo">
-                  <option value="">-- Chưa giao --</option>
-                </select>
-              </div>
-            </div>
-            <div class="row-actions">
-              ${canEditAssignment ? `
-                <button class="btn-icon-sm" onclick="startEditWorkflowField('assignedTo','${wf.id}')" title="Sửa người phụ trách"><i data-lucide="edit-3" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-save" onclick="saveWorkflowField('assignedTo','${wf.id}')" style="display:none" title="Lưu"><i data-lucide="check" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-cancel" onclick="cancelEditWorkflowField('assignedTo')" style="display:none" title="Huỷ"><i data-lucide="x" style="width:13px;height:13px"></i></button>
-              ` : ''}
-            </div>
-          </div>
-          
-          <div class="assignment-row" id="wf-assign-row-dueDate">
-            <div class="label">Hạn hoàn thành</div>
-            <div>
-              <div class="value-display ${!dueLabel ? 'empty' : ''}">${dueLabel || 'Chưa đặt hạn'}</div>
-              <div class="value-edit">
-                <input type="text" id="wf-edit-dueDate" data-format="date" value="${escapeHtml(dueRawDate ? formatDateVN(dueRawDate) : '')}" placeholder="dd/mm/yyyy" />
-              </div>
-            </div>
-            <div class="row-actions">
-              ${canEditAssignment ? `
-                <button class="btn-icon-sm" onclick="startEditWorkflowField('dueDate','${wf.id}')" title="Sửa hạn hoàn thành"><i data-lucide="edit-3" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-save" onclick="saveWorkflowField('dueDate','${wf.id}')" style="display:none" title="Lưu"><i data-lucide="check" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-cancel" onclick="cancelEditWorkflowField('dueDate')" style="display:none" title="Huỷ"><i data-lucide="x" style="width:13px;height:13px"></i></button>
-              ` : ''}
-            </div>
-          </div>
-          
-          <div class="assignment-row" id="wf-assign-row-priority">
-            <div class="label">Mức ưu tiên</div>
-            <div>
-              <div class="value-display">${priorityBadge(wf.priority || 'Trung bình')}</div>
-              <div class="value-edit">
-                <select id="wf-edit-priority">
-                  <option value="Thấp" ${wf.priority==='Thấp'?'selected':''}>Thấp</option>
-                  <option value="Trung bình" ${(!wf.priority||wf.priority==='Trung bình')?'selected':''}>Trung bình</option>
-                  <option value="Cao" ${wf.priority==='Cao'?'selected':''}>Cao</option>
-                  <option value="Khẩn cấp" ${wf.priority==='Khẩn cấp'?'selected':''}>Khẩn cấp</option>
-                </select>
-              </div>
-            </div>
-            <div class="row-actions">
-              ${canEditAssignment ? `
-                <button class="btn-icon-sm" onclick="startEditWorkflowField('priority','${wf.id}')" title="Sửa ưu tiên"><i data-lucide="edit-3" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-save" onclick="saveWorkflowField('priority','${wf.id}')" style="display:none" title="Lưu"><i data-lucide="check" style="width:13px;height:13px"></i></button>
-                <button class="btn-icon-sm btn-cancel" onclick="cancelEditWorkflowField('priority')" style="display:none" title="Huỷ"><i data-lucide="x" style="width:13px;height:13px"></i></button>
-              ` : ''}
-            </div>
-          </div>
-        </div>
-      `;
-    }
-    
-    document.getElementById('wfd-body').innerHTML = `
-      ${assignmentCard}
-      <div class="detail-card" style="margin-bottom:14px">
-        <h4>Trạng thái hiện tại</h4>
-        <div class="detail-row">
-          <div class="label">Giai đoạn</div>
-          <div class="value"><strong>${currentStage ? escapeHtml(currentStage.label) : escapeHtml(wf.currentStage)}</strong></div>
-        </div>
-        <div class="detail-row">
-          <div class="label">Phòng phụ trách</div>
-          <div class="value">${escapeHtml(wf.currentDept || '-')}</div>
-        </div>
-        <div class="detail-row">
-          <div class="label">Trạng thái</div>
-          <div class="value">${wf.status === 'completed' ? '<span class="badge-pill success">Đã hoàn thành</span>' : '<span class="badge-pill info">Đang hoạt động</span>'}</div>
-        </div>
-        ${entity ? `
-          <div class="detail-row">
-            <div class="label">Liên kết</div>
-            <div class="value">${escapeHtml(entity.code || '')}</div>
-          </div>
-          ${entity.totalAmount !== undefined && entity.totalAmount !== null ? `<div class="detail-row"><div class="label">Giá trị</div><div class="value"><strong>${formatVND(entity.totalAmount)}</strong></div></div>` : ''}
-          ${entity.deliveryDate ? `<div class="detail-row"><div class="label">Ngày giao</div><div class="value">${formatDateVN(entity.deliveryDate)}</div></div>` : ''}
-          ${entity.shippingAddress ? `<div class="detail-row"><div class="label">Giao đến</div><div class="value">${escapeHtml(entity.shippingAddress)}</div></div>` : ''}
-        ` : ''}
+    const r = await api('kanban.card.get', null, { id: cardId });
+    const card = r.card;
+    const cfg = state.kanban.config;
+    const stageRow = (cfg?.stages || []).find((s) => s.id === card.currentStage);
+    document.getElementById('kbd-title').textContent = card.title || '(không tiêu đề)';
+    document.getElementById('kbd-sub').textContent = `${card.cardType} · ${stageRow ? stageRow.name : card.currentStage}` + (card.customerName ? ` · ${card.customerName}` : '');
+
+    document.getElementById('drawer-kanban-card').dataset.cardId = card.id;
+
+    const modes = (card.financials && card.financials._modes) || {};
+    const isReadOnlyCol = state.kanban.data?.columns?.find((c) => c.stage.id === card.currentStage)?.readOnly;
+    const lockedAll = !!isReadOnlyCol || state.kanban.config?.me?.isReadOnly;
+
+    document.getElementById('kbd-save-btn').style.display = lockedAll ? 'none' : '';
+
+    const fin = card.financials || {};
+    const showGroup = (g) => modes[g] === 'write' || modes[g] === 'read';
+    const lockField = (g) => modes[g] !== 'write' || lockedAll;
+
+    const ftext = (key, group, label, type = 'text') => {
+      if (!showGroup(group)) return '';
+      const v = fin[key] != null ? fin[key] : '';
+      const disabled = lockField(group) ? 'disabled' : '';
+      return `<label class="kbd-field"><span>${label}</span><input type="${type}" data-fin-key="${key}" value="${escapeHtml(String(v))}" ${disabled}></label>`;
+    };
+
+    const itemsHtml = (card.items && card.items.length > 0) ? `
+      <div class="kbd-section">
+        <h4>Sản phẩm (${card.items.length})</h4>
+        <table class="kbd-items">
+          <thead><tr><th>Mã/Tên</th><th>SL</th><th>ĐVT</th>
+            ${showGroup('selling') ? '<th class="text-right">Đơn giá</th><th class="text-right">Thành tiền</th>' : ''}
+            ${showGroup('cost') ? '<th class="text-right">Giá vốn</th>' : ''}
+          </tr></thead>
+          <tbody>
+            ${card.items.map((it) => `
+              <tr>
+                <td>${escapeHtml(it.productCode || '')} ${escapeHtml(it.productName || '')}</td>
+                <td class="text-right">${escapeHtml(String(it.quantity ?? ''))}</td>
+                <td>${escapeHtml(it.unit || '')}</td>
+                ${showGroup('selling') ? `<td class="text-right">${it.unitPrice != null ? formatVND(it.unitPrice) : '-'}</td><td class="text-right">${it.lineSubtotal != null ? formatVND(it.lineSubtotal) : '-'}</td>` : ''}
+                ${showGroup('cost') ? `<td class="text-right">${it.costPrice != null ? formatVND(it.costPrice) : '-'}</td>` : ''}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
       </div>
-      ${customerCard}
-      ${itemsCard}
-      <div class="detail-card">
-        <h4>Lịch sử chuyển phòng (${history.length})</h4>
-        ${timelineHtml}
+    ` : '';
+
+    const logsHtml = (r.logs && r.logs.length > 0) ? `
+      <div class="kbd-section">
+        <h4>Lịch sử (${r.logs.length})</h4>
+        <ul class="kbd-logs">
+          ${r.logs.map((l) => `
+            <li>
+              <strong>${escapeHtml(l.action)}</strong>
+              ${l.fromStage && l.toStage ? `· ${escapeHtml(l.fromStage)} → ${escapeHtml(l.toStage)}` : ''}
+              <span class="kbd-log-time">${formatDateTimeVN(l.at)}</span>
+            </li>
+          `).join('')}
+        </ul>
       </div>
+    ` : '';
+
+    // Nút "Tạo kỳ thuê" cho thẻ thue_may ở RENTAL_ACTIVE
+    let rentalBtn = '';
+    const me = state.kanban.config?.me;
+    const allowRentalBtn = me && !me.isReadOnly && (me.isAdmin || me.deptCode === 'KTHC');
+    if (card.cardType === 'thue_may' && card.currentStage === 'RENTAL_ACTIVE' && allowRentalBtn) {
+      rentalBtn = `<button class="btn btn-outline" style="margin-bottom:12px" onclick="openCreateRentalPeriod('${card.id}')"><i data-lucide="calendar-plus" style="width:14px;height:14px"></i> Tạo kỳ thuê mới</button>`;
+    }
+
+    document.getElementById('kbd-body').innerHTML = `
+      ${rentalBtn}
+      ${lockedAll ? '<div class="kbd-banner-info"><i data-lucide="lock" style="width:14px;height:14px"></i> Thẻ ở chế độ chỉ-đọc cho vai trò của bạn.</div>' : ''}
+      <div class="kbd-section">
+        <h4>Thông tin chung</h4>
+        <label class="kbd-field"><span>Tiêu đề</span>
+          <input type="text" data-card-key="title" value="${escapeHtml(card.title || '')}" ${lockedAll ? 'disabled' : ''}>
+        </label>
+        <label class="kbd-field"><span>Khách hàng</span>
+          <input type="text" data-card-key="customerName" value="${escapeHtml(card.customerName || '')}" ${lockedAll ? 'disabled' : ''}>
+        </label>
+      </div>
+      ${(showGroup('selling') || showGroup('cost') || showGroup('billing') || showGroup('debt')) ? `
+      <div class="kbd-section">
+        <h4>Tài chính</h4>
+        ${ftext('unit_price', 'selling', 'Đơn giá', 'number')}
+        ${ftext('quantity', 'selling', 'Số lượng', 'number')}
+        ${ftext('subtotal', 'selling', 'Tạm tính', 'number')}
+        ${ftext('total_amount', 'selling', 'Tổng tiền', 'number')}
+        ${ftext('cost_price', 'cost', 'Giá vốn (tổng)', 'number')}
+        ${ftext('margin', 'cost', 'Lợi nhuận biên', 'number')}
+        ${ftext('invoice_no', 'billing', 'Số hóa đơn')}
+        ${ftext('invoice_date', 'billing', 'Ngày hóa đơn', 'date')}
+        ${ftext('debt_amount', 'debt', 'Số tiền còn nợ', 'number')}
+        ${ftext('due_date', 'debt', 'Hạn thanh toán', 'date')}
+        ${ftext('paid_amount', 'debt', 'Đã thu', 'number')}
+        ${showGroup('debt') ? `<label class="kbd-field"><span>Trạng thái thanh toán</span>
+          <select data-fin-key="payment_status" ${lockField('debt') ? 'disabled' : ''}>
+            ${['unpaid', 'partial', 'paid'].map((v) => `<option value="${v}" ${fin.payment_status === v ? 'selected' : ''}>${v}</option>`).join('')}
+          </select>
+        </label>` : ''}
+      </div>
+      ` : '<div class="kbd-banner-info"><i data-lucide="lock" style="width:14px;height:14px"></i> Bạn không có quyền xem tài chính của thẻ này.</div>'}
+      ${itemsHtml}
+      ${logsHtml}
     `;
-    
-    // Phase 4B3: populate assignee dropdown sau khi DOM được tạo
-    if (canEditAssignment && document.getElementById('wf-edit-assignedTo')) {
-      await populateAssignedToDropdown('wf-edit-assignedTo', { emptyLabel: 'Chưa giao' });
-      // Set giá trị hiện tại
-      if (wf.assignedTo) {
-        document.getElementById('wf-edit-assignedTo').value = wf.assignedTo;
-      }
-    }
-    // Init date input cho dueDate
-    if (canEditAssignment) {
-      initDateInputs(document.getElementById('wfd-body'));
-    }
-    
-    lucide.createIcons();
+    if (window.lucide) window.lucide.createIcons();
   } catch (e) {
-    document.getElementById('wfd-body').innerHTML = `<div class="empty-state"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
+    document.getElementById('kbd-body').innerHTML = `<div class="empty-state"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
   }
 }
 
-// ============================================================
-// PHASE 4B3 - INLINE EDIT WORKFLOW FIELDS (assignedTo, dueDate, priority)
-// ============================================================
+export async function saveKanbanCardEdits() {
+  const drawer = document.getElementById('drawer-kanban-card');
+  const cardId = drawer?.dataset?.cardId;
+  if (!cardId) return;
+  const payload = { id: cardId };
 
-/**
- * Bắt đầu sửa 1 field trong assignment card
- */
-export function startEditWorkflowField(field, workflowId) {
-  const row = document.getElementById('wf-assign-row-' + field);
-  if (!row) return;
-  row.classList.add('editing');
-  // Show save+cancel, hide edit
-  row.querySelectorAll('.btn-icon-sm').forEach(b => {
-    if (b.classList.contains('btn-save') || b.classList.contains('btn-cancel')) {
-      b.style.display = '';
-    } else {
-      b.style.display = 'none';
-    }
+  drawer.querySelectorAll('[data-card-key]').forEach((el) => {
+    if (el.disabled) return;
+    payload[el.dataset.cardKey] = el.value;
   });
-  // Focus input
-  const input = row.querySelector('.value-edit select, .value-edit input');
-  if (input) setTimeout(() => input.focus(), 50);
-}
 
-/**
- * Hủy sửa, restore display
- */
-export function cancelEditWorkflowField(field) {
-  const row = document.getElementById('wf-assign-row-' + field);
-  if (!row) return;
-  row.classList.remove('editing');
-  // Restore button visibility
-  row.querySelectorAll('.btn-icon-sm').forEach(b => {
-    if (b.classList.contains('btn-save') || b.classList.contains('btn-cancel')) {
-      b.style.display = 'none';
-    } else {
-      b.style.display = '';
-    }
+  const fin = {};
+  drawer.querySelectorAll('[data-fin-key]').forEach((el) => {
+    if (el.disabled) return;
+    const k = el.dataset.finKey;
+    let v = el.value;
+    if (el.type === 'number') v = v === '' ? null : Number(v);
+    if (el.type === 'date' && !v) v = null;
+    fin[snakeToCamelKey(k)] = v;
   });
-}
+  if (Object.keys(fin).length > 0) payload.financials = fin;
 
-/**
- * Lưu giá trị mới của field sang backend
- */
-export async function saveWorkflowField(field, workflowId) {
-  let newValue;
-  
-  if (field === 'assignedTo') {
-    newValue = document.getElementById('wf-edit-assignedTo').value;
-  } else if (field === 'priority') {
-    newValue = document.getElementById('wf-edit-priority').value;
-  } else if (field === 'dueDate') {
-    const dateInput = document.getElementById('wf-edit-dueDate');
-    // getCustomInputValue parses dd/mm/yyyy → ISO yyyy-mm-dd
-    newValue = getCustomInputValue(dateInput) || '';
-  } else {
-    toast('Trường không hợp lệ', 'error');
-    return;
-  }
-  
   try {
-    const payload = { id: workflowId };
-    payload[field] = newValue;
-    await api('workflow.update', payload);
-    toast('Đã cập nhật', 'success');
-    cancelEditWorkflowField(field);
-    // Reload drawer để hiển thị giá trị mới (kèm badge dueDate)
-    openWorkflowDetail(workflowId);
-    // Reload Kanban background (cho card cập nhật)
-    loadWorkflows();
+    await api('kanban.card.update', payload);
+    toast('Đã lưu', 'success');
+    loadKanbanBoard({ silent: true });
+    openKanbanCard(cardId);
+  } catch (e) {
+    toast(e.message || 'Không lưu được', 'error');
+  }
+}
+
+function snakeToCamelKey(s) {
+  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+// ============================================================================
+// TẠO THẺ MỚI
+// ============================================================================
+
+export async function openCreateKanbanCardForm() {
+  const me = state.kanban.config?.me;
+  if (!me || me.isReadOnly) { toast('Vai trò của bạn không tạo được thẻ', 'error'); return; }
+
+  // Chọn cardType theo phòng của user
+  const allowedTypes = [];
+  if (me.isAdmin || me.deptCode === 'KD') { allowedTypes.push({ key: 'ban_may', label: 'Bán máy' }, { key: 'thue_may', label: 'Cho thuê máy (hợp đồng)' }); }
+  if (me.isAdmin || me.deptCode === 'KT') { allowedTypes.push({ key: 'ban_vat_tu', label: 'Bán vật tư' }); }
+  if (allowedTypes.length === 0) { toast('Phòng của bạn không tạo được thẻ ở đây', 'error'); return; }
+
+  let modal = document.getElementById('modal-new-kanban-card');
+  if (!modal) {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-backdrop" id="modal-new-kanban-card">
+        <div class="modal" style="max-width:520px">
+          <div class="modal-header">
+            <h3>Tạo thẻ Kanban mới</h3>
+            <button class="modal-close" onclick="closeModal('modal-new-kanban-card')"><i data-lucide="x" style="width:18px;height:18px"></i></button>
+          </div>
+          <div class="modal-body">
+            <label class="kbd-field"><span>Loại thẻ</span>
+              <select id="new-kbn-type"></select>
+            </label>
+            <label class="kbd-field"><span>Tiêu đề</span>
+              <input type="text" id="new-kbn-title" placeholder="Ví dụ: Báo giá máy XYZ cho KH ABC">
+            </label>
+            <label class="kbd-field"><span>Tên khách hàng</span>
+              <input type="text" id="new-kbn-customer" placeholder="(tuỳ chọn)">
+            </label>
+            <label class="kbd-field"><span>Sản phẩm (ID, tuỳ chọn)</span>
+              <input type="text" id="new-kbn-product-id" placeholder="UUID của crm_products">
+            </label>
+            <label class="kbd-field"><span>Số lượng</span>
+              <input type="number" id="new-kbn-qty" value="1">
+            </label>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-ghost" onclick="closeModal('modal-new-kanban-card')">Huỷ</button>
+            <button class="btn btn-primary" onclick="submitNewKanbanCard()">Tạo thẻ</button>
+          </div>
+        </div>
+      </div>
+    `);
+    if (window.lucide) window.lucide.createIcons();
+  }
+  const sel = document.getElementById('new-kbn-type');
+  sel.innerHTML = allowedTypes.map((t) => `<option value="${t.key}">${t.label}</option>`).join('');
+  document.getElementById('new-kbn-title').value = '';
+  document.getElementById('new-kbn-customer').value = '';
+  document.getElementById('new-kbn-product-id').value = '';
+  document.getElementById('new-kbn-qty').value = '1';
+  openModal('modal-new-kanban-card');
+}
+
+export async function submitNewKanbanCard() {
+  const cardType = document.getElementById('new-kbn-type').value;
+  const title = document.getElementById('new-kbn-title').value.trim();
+  const customerName = document.getElementById('new-kbn-customer').value.trim();
+  const productId = document.getElementById('new-kbn-product-id').value.trim();
+  const quantity = parseFloat(document.getElementById('new-kbn-qty').value) || 1;
+  if (!title) { toast('Cần tiêu đề', 'error'); return; }
+
+  const payload = { cardType, title };
+  if (customerName) payload.customerName = customerName;
+  if (productId) {
+    payload.items = [{ productId, quantity }];
+  }
+  try {
+    await api('kanban.card.create', payload);
+    closeModal('modal-new-kanban-card');
+    toast('Đã tạo thẻ', 'success');
+    loadKanbanBoard({ silent: true });
+  } catch (e) {
+    toast(e.message || 'Không tạo được thẻ', 'error');
+  }
+}
+
+// ============================================================================
+// TẠO KỲ THUÊ (từ thẻ thue_may)
+// ============================================================================
+
+export async function openCreateRentalPeriod(contractCardId) {
+  const label = window.prompt('Nhãn kỳ (vd "Kỳ 2026-06"):', '');
+  if (label === null) return;
+  const start = window.prompt('Ngày bắt đầu kỳ (yyyy-mm-dd, tuỳ chọn):', '');
+  const end = window.prompt('Ngày kết thúc kỳ (yyyy-mm-dd, tuỳ chọn):', '');
+  try {
+    await api('kanban.rentalPeriod.create', {
+      contractCardId,
+      periodLabel: label || null,
+      periodStart: start || null,
+      periodEnd: end || null,
+    });
+    toast('Đã tạo kỳ thuê', 'success');
+    loadKanbanBoard({ silent: true });
+  } catch (e) {
+    toast(e.message || 'Không tạo được kỳ thuê', 'error');
+  }
+}
+
+// ============================================================================
+// FILTER cardType
+// ============================================================================
+
+export function setKanbanCardTypeFilter(value) {
+  state.kanban.filterCardType = value || '';
+  loadKanbanBoard();
+}
+
+// ============================================================================
+// CHUÔNG 🔔 — Kanban notifications
+// ============================================================================
+
+async function refreshKanbanNotifBadge() {
+  const badge = document.getElementById('kanban-notif-badge');
+  if (!badge) return;
+  try {
+    const r = await api('kanban.notifications.list', null, { limit: 1 }, { silent: true });
+    const n = r.unreadCount || 0;
+    if (n > 0) {
+      badge.textContent = n > 99 ? '99+' : String(n);
+      badge.style.display = 'inline-flex';
+    } else {
+      badge.style.display = 'none';
+    }
+  } catch (e) { /* ignore */ }
+}
+
+function startKanbanNotifPolling() {
+  if (state.kanban.notifPollTimer) return;
+  state.kanban.notifPollTimer = setInterval(refreshKanbanNotifBadge, 60000); // 60s
+}
+
+export async function openKanbanNotifPanel() {
+  let panel = document.getElementById('modal-kanban-notif');
+  if (!panel) {
+    document.body.insertAdjacentHTML('beforeend', `
+      <div class="modal-backdrop" id="modal-kanban-notif">
+        <div class="modal" style="max-width:520px">
+          <div class="modal-header">
+            <h3><i data-lucide="bell" style="width:18px;height:18px"></i> Thông báo Kanban</h3>
+            <button class="modal-close" onclick="closeModal('modal-kanban-notif')"><i data-lucide="x" style="width:18px;height:18px"></i></button>
+          </div>
+          <div class="modal-body">
+            <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+              <button class="btn btn-ghost btn-sm" onclick="markAllKanbanNotifRead()">Đánh dấu tất cả đã đọc</button>
+            </div>
+            <div id="kanban-notif-list"><div class="empty-state"><div class="spinner dark"></div> Đang tải...</div></div>
+          </div>
+        </div>
+      </div>
+    `);
+    if (window.lucide) window.lucide.createIcons();
+  }
+  openModal('modal-kanban-notif');
+  try {
+    const r = await api('kanban.notifications.list', null, { limit: 50 }, { silent: true });
+    const items = r.items || [];
+    const list = document.getElementById('kanban-notif-list');
+    // Chỉ lọc notification liên quan kanban (theo type)
+    const kanbanTypes = ['card_assigned', 'card_handoff', 'card_returned', 'debt_overdue'];
+    const kanbanItems = items.filter((n) => kanbanTypes.includes(n.type));
+    if (kanbanItems.length === 0) {
+      list.innerHTML = '<div class="empty-state"><p>Không có thông báo Kanban.</p></div>';
+    } else {
+      list.innerHTML = kanbanItems.map((n) => `
+        <div class="kbd-notif-item ${n.isRead ? 'read' : 'unread'}" data-id="${n.id}" onclick="onKanbanNotifClick('${n.id}','${n.cardId || n.entityId || ''}')">
+          <div class="kbd-notif-title">${escapeHtml(n.title)}</div>
+          <div class="kbd-notif-body">${escapeHtml(n.message || '')}</div>
+          <div class="kbd-notif-meta">${timeAgo(n.createdAt)} · ${escapeHtml(n.type)}</div>
+        </div>
+      `).join('');
+    }
+    refreshKanbanNotifBadge();
+  } catch (e) {
+    document.getElementById('kanban-notif-list').innerHTML = `<div class="empty-state"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
+  }
+}
+
+export async function onKanbanNotifClick(notifId, cardId) {
+  try {
+    await api('kanban.notifications.read', { ids: [notifId] }, null, { silent: true });
+  } catch (e) { /* ignore */ }
+  closeModal('modal-kanban-notif');
+  if (cardId) openKanbanCard(cardId);
+  refreshKanbanNotifBadge();
+}
+
+export async function markAllKanbanNotifRead() {
+  try {
+    await api('kanban.notifications.read', { all: true }, null, { silent: true });
+    toast('Đã đánh dấu tất cả', 'success');
+    openKanbanNotifPanel(); // refresh
   } catch (e) {
     toast(e.message, 'error');
   }
 }
 
-// Event handler cho sub-tabs workflow
-document.querySelectorAll('.workflow-tab').forEach(t => {
-  t.addEventListener('click', () => {
-    const target = t.dataset.wftype;
-    document.querySelectorAll('.workflow-tab').forEach(x => x.classList.toggle('active', x.dataset.wftype === target));
-    state.workflow.currentType = target;
-    loadWorkflows();
-  });
-});
-
-/**
- * Admin only: tạo workflow cho các đơn/ticket cũ chưa có
- */
-export async function workflowBackfill() {
-  if (!(await confirmDialog({ title: 'Xác nhận', message: 'Tạo workflow cho TẤT CẢ đơn hàng và ticket cũ chưa có?\n\nLưu ý: Tính năng này chạy 1 lần để bổ sung dữ liệu cũ. Nên chạy sau khi vừa update bản Phase 4B.', type: 'warning' }))) return;
-  showLoading('Đang xử lý...');
-  try {
-    const r = await api('workflow.backfill');
-    hideLoading();
-    toast(r.message || 'Đã backfill', 'success');
-    loadWorkflows();
-  } catch (e) {
-    hideLoading();
-    toast(e.message, 'error');
-  }
-}
-
-
-// Expose to window for HTML inline event handlers
-window.loadWorkflows = loadWorkflows;
-window.filterCompletedCards = filterCompletedCards;
+// ============================================================================
+// EXPOSE TO WINDOW
+// ============================================================================
+window.loadKanbanBoard = loadKanbanBoard;
 window.renderKanbanBoard = renderKanbanBoard;
-window.hasActiveFilters = hasActiveFilters;
-window.applyWorkflowFilters = applyWorkflowFilters;
-window.clearWorkflowFilters = clearWorkflowFilters;
-window.refreshAssigneeFilterOptions = refreshAssigneeFilterOptions;
-window.bindWorkflowFilterEvents = bindWorkflowFilterEvents;
 window.kanbanDragStart = kanbanDragStart;
 window.kanbanDragEnd = kanbanDragEnd;
 window.kanbanDragOver = kanbanDragOver;
 window.kanbanDragLeave = kanbanDragLeave;
 window.kanbanDrop = kanbanDrop;
-window.setCompletedFilter = setCompletedFilter;
-window.openCompletedHistory = openCompletedHistory;
-window.renderKanbanCard = renderKanbanCard;
-window.renderDueDateBadge = renderDueDateBadge;
-window.moveWorkflowStage = moveWorkflowStage;
-window.openWorkflowDetail = openWorkflowDetail;
-window.startEditWorkflowField = startEditWorkflowField;
-window.cancelEditWorkflowField = cancelEditWorkflowField;
-window.saveWorkflowField = saveWorkflowField;
-window.workflowBackfill = workflowBackfill;
+window.openKanbanCard = openKanbanCard;
+window.saveKanbanCardEdits = saveKanbanCardEdits;
+window.openCreateKanbanCardForm = openCreateKanbanCardForm;
+window.submitNewKanbanCard = submitNewKanbanCard;
+window.openCreateRentalPeriod = openCreateRentalPeriod;
+window.setKanbanCardTypeFilter = setKanbanCardTypeFilter;
+window.openKanbanNotifPanel = openKanbanNotifPanel;
+window.onKanbanNotifClick = onKanbanNotifClick;
+window.markAllKanbanNotifRead = markAllKanbanNotifRead;
+
+// Backward-compat (main.js gọi loadWorkflows() khi switch tab "workflow")
+window.loadWorkflows = loadKanbanBoard;
