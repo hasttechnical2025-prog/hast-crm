@@ -430,14 +430,24 @@ function snakeToCamelKey(s) {
 // ============================================================================
 
 export async function openCreateKanbanCardForm() {
+  // Config có thể chưa load (lỗi mạng lúc vào tab) → thử load lại trước khi kết luận quyền.
+  if (!state.kanban.config) {
+    try {
+      state.kanban.config = await api('kanban.config.get', null, null, { silent: true });
+    } catch (e) {
+      toast('Không tải được cấu hình Kanban: ' + (e.message || 'lỗi kết nối'), 'error');
+      return;
+    }
+  }
   const me = state.kanban.config?.me;
-  if (!me || me.isReadOnly) { toast('Vai trò của bạn không tạo được thẻ', 'error'); return; }
+  if (!me) { toast('Không xác định được vai trò của bạn — thử tải lại trang', 'error'); return; }
+  if (me.isReadOnly) { toast('Boss chỉ có quyền xem, không tạo được thẻ', 'error'); return; }
 
-  // Chọn cardType theo phòng của user
+  // Chọn cardType theo phòng của user (NV + TP đúng phòng đều tạo được — server check lại)
   const allowedTypes = [];
   if (me.isAdmin || me.deptCode === 'KD') { allowedTypes.push({ key: 'ban_may', label: 'Bán máy' }, { key: 'thue_may', label: 'Cho thuê máy (hợp đồng)' }); }
   if (me.isAdmin || me.deptCode === 'KT') { allowedTypes.push({ key: 'ban_vat_tu', label: 'Bán vật tư' }); }
-  if (allowedTypes.length === 0) { toast('Phòng của bạn không tạo được thẻ ở đây', 'error'); return; }
+  if (allowedTypes.length === 0) { toast(`Phòng ${me.deptCode || '(chưa gán)'} không khởi tạo loại thẻ nào — KD tạo bán/thuê máy, KT tạo bán vật tư`, 'error'); return; }
 
   let modal = document.getElementById('modal-new-kanban-card');
   if (!modal) {

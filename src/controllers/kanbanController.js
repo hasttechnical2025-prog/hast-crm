@@ -555,13 +555,18 @@ async function kanbanCardCreate(currentUser, payload) {
     e.code = 'BAD_REQUEST'; throw e;
   }
 
+  // NV tạo thẻ không chỉ định người phụ trách → tự gán cho chính mình,
+  // nếu không thẻ unassigned sẽ không kéo được bởi chính người tạo (§5.3).
+  let assignedTo = payload.assignedTo || null;
+  if (!assignedTo && ctx.role === 'nhan_vien') assignedTo = ctx.userId;
+
   // Insert card trước (cần id để insert financials + items)
   const insertCard = {
     card_type: cardType,
     title,
     current_stage: initialStage,
     owner_dept: initialDept,
-    assigned_to: payload.assignedTo || null,
+    assigned_to: assignedTo,
     customer_id: payload.customerId || null,
     customer_name: payload.customerName || null,
     status: 'active',
