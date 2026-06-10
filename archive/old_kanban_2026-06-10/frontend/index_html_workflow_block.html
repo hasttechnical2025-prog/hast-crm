@@ -1,0 +1,75 @@
+<!--
+  BACKUP của khối WORKFLOW/KANBAN cũ trong index.html (Phase 4B).
+  Vị trí gốc: index.html, lines 859-920 (header + tab panel + Kanban board container).
+  Cộng thêm: button tab line 168.
+
+  Hành động: block này SẼ BỊ THAY THẾ bởi UI Kanban mới (spec §8).
+  Giữ file này để có thể tra cứu nếu cần.
+-->
+
+<!-- LINE 168 (button tab) -->
+<button class="tab" data-tab="workflow">
+
+<!-- LINES 859-920 (tab panel + filter bar + kanban board) -->
+      <!-- ============ TAB WORKFLOW (Phase 4B) ============ -->
+      <section class="tab-panel" data-panel="workflow">
+        <div class="page-header">
+          <div>
+            <h1 class="page-title">Quy trình liên phòng ban</h1>
+            <div class="page-subtitle">Theo dõi và chuyển công việc giữa Kinh doanh, Kỹ thuật, Kế toán-Hành chính</div>
+          </div>
+          <div class="page-actions">
+            <button class="btn btn-outline btn-sm" data-roles="admin" onclick="workflowBackfill()" title="Tạo workflow cho các đơn/ticket cũ chưa có" style="display:none"><i data-lucide="zap" style="width:14px;height:14px"></i> Tạo cho đơn cũ</button>
+            <button class="btn btn-outline btn-sm" onclick="loadWorkflows()"><i data-lucide="refresh-cw" style="width:14px;height:14px"></i> Làm mới</button>
+          </div>
+        </div>
+
+        <!-- Sub-tabs 3 loại workflow -->
+        <div class="sub-tabs workflow-tabs">
+          <button class="sub-tab workflow-tab active" data-wftype="sales">
+            <i data-lucide="shopping-cart" style="width:14px;height:14px"></i> Bán hàng & Thanh toán
+            <span class="wf-count" id="wf-count-sales">0</span>
+          </button>
+          <button class="sub-tab workflow-tab" data-wftype="installation">
+            <i data-lucide="wrench" style="width:14px;height:14px"></i> Lắp đặt máy
+            <span class="wf-count" id="wf-count-installation">0</span>
+          </button>
+          <button class="sub-tab workflow-tab" data-wftype="maintenance">
+            <i data-lucide="life-buoy" style="width:14px;height:14px"></i> Bảo trì kỹ thuật
+            <span class="wf-count" id="wf-count-maintenance">0</span>
+          </button>
+        </div>
+
+        <!-- Filter Toolbar (Phase 4B2) -->
+        <div class="workflow-filter-bar">
+          <div class="filter-search">
+            <i data-lucide="search" style="width:14px;height:14px"></i>
+            <input type="text" id="wf-filter-search" placeholder="Tìm mã đơn, tên khách hàng..." />
+          </div>
+          <select id="wf-filter-priority" class="filter-select" title="Lọc theo ưu tiên">
+            <option value="">Tất cả ưu tiên</option>
+            <option value="Khẩn cấp">🔴 Khẩn cấp</option>
+            <option value="Cao">🟠 Cao</option>
+            <option value="Trung bình">🔵 Trung bình</option>
+            <option value="Thấp">⚪ Thấp</option>
+          </select>
+          <select id="wf-filter-assignee" class="filter-select" title="Lọc theo người phụ trách">
+            <option value="">Tất cả người phụ trách</option>
+            <option value="__me__">👤 Của tôi</option>
+            <option value="__none__">⊘ Chưa giao</option>
+          </select>
+          <select id="wf-filter-overdue" class="filter-select" title="Lọc theo hạn">
+            <option value="">Tất cả</option>
+            <option value="overdue">⏰ Quá hạn</option>
+            <option value="today">📅 Hôm nay</option>
+            <option value="week">📆 Trong tuần</option>
+            <option value="nodue">∅ Chưa đặt hạn</option>
+          </select>
+          <button class="btn-link-action" id="wf-clear-filters" onclick="clearWorkflowFilters()" title="Xoá tất cả bộ lọc"><i data-lucide="x" style="width:13px;height:13px"></i> Xoá bộ lọc</button>
+        </div>
+
+        <!-- Kanban Board -->
+        <div id="kanban-board" class="kanban-board-grid">
+          <div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải...</div>
+        </div>
+      </section>
