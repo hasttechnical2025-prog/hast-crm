@@ -1002,19 +1002,53 @@ a { color: inherit; text-decoration: none; }
 }
 .form-section-title:first-child { margin-top: 0; }
 
-/* Loại đơn (Kanban v3) — radio bắt buộc trên form đơn hàng */
-.order-type-radios { display: flex; gap: 8px; flex-wrap: wrap; }
-.order-type-radios .ot-radio {
-  flex: 1; min-width: 120px;
-  display: flex; align-items: center; gap: 6px;
-  padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
-  cursor: pointer; font-size: 13px; font-weight: 500; color: var(--ink-2);
-  transition: all 0.12s; user-select: none; margin: 0;
+/* Dấu * bắt buộc (đỏ) */
+.field label .req { color: var(--danger); font-weight: 700; }
+
+/* Ô lỗi khi validate client-side */
+.field.field-invalid input,
+.field.field-invalid select,
+.field.field-invalid textarea { border-color: var(--danger); box-shadow: 0 0 0 2px rgba(220,38,38,0.12); }
+.field-error-msg { color: var(--danger); font-size: 11.5px; margin-top: 4px; }
+
+/* Loại đơn (Kanban v3) — 3 SELECTABLE CARD: icon trên, nhãn dưới, căn giữa */
+.order-type-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
 }
-.order-type-radios .ot-radio:hover { border-color: var(--navy-400, var(--navy-600)); background: var(--paper-2); }
-.order-type-radios .ot-radio input { margin: 0; accent-color: var(--navy-700); }
-.order-type-radios .ot-radio:has(input:checked) {
-  border-color: var(--navy-700); background: var(--navy-100); color: var(--navy-900); font-weight: 600;
+.order-type-cards .ot-card {
+  position: relative;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 16px 10px;
+  border: 1.5px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, transform 0.1s;
+  user-select: none; margin: 0;
+}
+.order-type-cards .ot-card input { position: absolute; opacity: 0; pointer-events: none; }
+.order-type-cards .ot-icon { font-size: 26px; line-height: 1; }
+.order-type-cards .ot-label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.order-type-cards .ot-card:hover {
+  border-color: var(--navy-600);
+  background: var(--paper-2);
+  transform: translateY(-1px);
+}
+.order-type-cards .ot-card:has(input:checked) {
+  border-color: var(--navy-700);
+  background: var(--navy-100);
+  box-shadow: 0 0 0 2px var(--navy-700) inset;
+}
+.order-type-cards .ot-card:has(input:checked) .ot-label { color: var(--navy-900); }
+.order-type-cards .ot-card:has(input:focus-visible) { outline: 2px solid var(--navy-600); outline-offset: 2px; }
+/* Highlight khi thiếu loại đơn lúc validate */
+.field.field-invalid .order-type-cards { outline: 2px solid var(--danger); outline-offset: 3px; border-radius: 12px; }
+@media (max-width: 560px) {
+  .order-type-cards { grid-template-columns: 1fr; }
+  .order-type-cards .ot-card { flex-direction: row; justify-content: flex-start; gap: 12px; padding: 12px 14px; }
 }
 
 /* Customer detail */

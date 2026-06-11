@@ -15,6 +15,7 @@ const {
   kanbanPaymentAdd,
   kanbanPaymentConfirm,
   kanbanPaymentList,
+  kanbanPaymentSummaryByOrder,
   kanbanNotificationsList,
   kanbanNotificationsRead,
   kanbanDebtScan,
@@ -149,6 +150,9 @@ async function handleRequest(req, res) {
         return res.json({ success: true, data: result, message: 'Đã xác nhận thanh toán' });
       } else if (sub === 'payment.list') {
         result = await kanbanPaymentList(currentUser, params);
+        return res.json({ success: true, data: result });
+      } else if (sub === 'payment.summaryByOrder') {
+        result = await kanbanPaymentSummaryByOrder(currentUser, params);
         return res.json({ success: true, data: result });
       } else if (sub === 'notifications.list') {
         result = await kanbanNotificationsList(currentUser, params);

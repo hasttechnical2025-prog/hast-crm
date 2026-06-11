@@ -19,9 +19,15 @@ import {
   formatDateVN,
   formatDateTimeVN,
   formatVND,
+  formatThousands,
+  parseMoney,
+  initDateInputs,
   escapeHtml,
   timeAgo,
 } from '../utils.js';
+
+// Format tiền #.### (phân tách hàng nghìn)
+const fmtMoney = (n) => formatThousands(Math.round(Number(n) || 0));
 
 // ============================================================================
 // STATE
@@ -312,28 +318,37 @@ export async function openKanbanCard(cardId) {
         </tbody></table>
       </div>` : '';
 
-    // Payments ledger (chỉ thẻ thương mại + vai thấy debt)
+    // Payments ledger (chỉ thẻ thương mại + vai thấy debt). Sổ chung crm_kanban_payments.
     let paymentsHtml = '';
     const canSeePayments = !isTech && (showGroup('debt') || me.isAdmin);
     if (canSeePayments) {
-      const balance = fin.debt_amount != null ? fin.debt_amount : (fin.debtAmount != null ? fin.debtAmount : null);
-      const canRecord = !me.isReadOnly;        // KD/KT phòng tạo đơn + KTHC + admin (server check lại)
+      const total = Number(fin.total_amount ?? fin.totalAmount ?? 0);
+      const paidConfirmed = payments.filter((p) => p.status === 'confirmed').reduce((s, p) => s + Number(p.amount || 0), 0);
+      const pendingTotal = payments.filter((p) => p.status === 'pending').reduce((s, p) => s + Number(p.amount || 0), 0);
+      const balance = Math.max(total - paidConfirmed, 0);
+      const canRecord = !me.isReadOnly;        // phòng tạo đơn + KTHC + admin (server check lại)
       const canConfirm = me.isAdmin || me.deptCode === 'KTHC';
       paymentsHtml = `
         <div class="kbd-section">
-          <h4>Sổ thanh toán${balance != null ? ` · Còn nợ: <strong>${formatVND(balance)}</strong>` : ''}</h4>
+          <h4>Sổ thanh toán</h4>
+          <div class="kbd-pay-summary">
+            <div><span>Tổng</span><strong>${fmtMoney(total)} ₫</strong></div>
+            <div><span>Đã trả</span><strong class="ok">${fmtMoney(paidConfirmed)} ₫</strong></div>
+            <div><span>Còn lại</span><strong class="danger">${fmtMoney(balance)} ₫</strong></div>
+            <div><span>Chờ xác nhận</span><strong class="warn">${fmtMoney(pendingTotal)} ₫</strong></div>
+          </div>
           ${canRecord ? `
             <div class="kbd-pay-add">
-              <input type="number" id="kbd-pay-amount" placeholder="Số tiền khách trả" min="0">
+              <input type="text" data-format="money" inputmode="numeric" id="kbd-pay-amount" placeholder="Số tiền khách trả" data-balance="${balance}">
               <input type="text" id="kbd-pay-note" placeholder="Ghi chú (tuỳ chọn)">
               <button class="btn btn-sm btn-primary" onclick="addKanbanPayment('${card.id}')">Ghi khoản</button>
             </div>
-            <div class="kbd-pay-hint">${me.deptCode === 'KTHC' || me.isAdmin ? 'Khoản bạn ghi sẽ được xác nhận ngay.' : 'Khoản bạn ghi ở trạng thái CHỜ KTHC xác nhận.'}</div>
+            <div class="kbd-pay-hint">${(me.deptCode === 'KTHC' || me.isAdmin) ? 'Khoản bạn ghi sẽ được xác nhận ngay.' : 'Khoản bạn ghi ở trạng thái CHỜ KTHC xác nhận.'}</div>
           ` : ''}
           ${payments.length === 0 ? '<div class="kbd-empty-line">Chưa có khoản thanh toán nào.</div>' : `
             <table class="kbd-items"><thead><tr><th>Số tiền</th><th>Phòng</th><th>Trạng thái</th><th>Thời gian</th><th></th></tr></thead><tbody>
               ${payments.map((p) => `<tr>
-                <td><strong>${formatVND(p.amount)}</strong></td>
+                <td><strong>${fmtMoney(p.amount)} ₫</strong></td>
                 <td>${escapeHtml(p.recordedDept || '')}</td>
                 <td><span class="pay-badge pay-badge--${p.status}">${p.status === 'confirmed' ? 'Đã xác nhận' : 'Chờ xác nhận'}</span></td>
                 <td>${timeAgo(p.createdAt)}</td>
@@ -382,6 +397,8 @@ export async function openKanbanCard(cardId) {
       ${itemsHtml}
       ${paymentsHtml}
       ${logsHtml}`;
+    // Format ô tiền (#.###) trong sổ thanh toán
+    initDateInputs(document.getElementById('kbd-body'));
     if (window.lucide) window.lucide.createIcons();
   } catch (e) {
     document.getElementById('kbd-body').innerHTML = `<div class="empty-state"><p>Lỗi: ${escapeHtml(e.message)}</p></div>`;
@@ -418,12 +435,25 @@ function snakeToCamelKey(s) { return s.replace(/_([a-z])/g, (_, c) => c.toUpperC
 // ============================================================================
 
 export async function addKanbanPayment(cardId) {
-  const amount = Number(document.getElementById('kbd-pay-amount')?.value);
+  const amtEl = document.getElementById('kbd-pay-amount');
+  const amount = parseMoney(amtEl?.value || '');
   const note = document.getElementById('kbd-pay-note')?.value || '';
   if (!(amount > 0)) { toast('Nhập số tiền hợp lệ', 'error'); return; }
+
+  // §12.4: vượt số dư còn lại → cảnh báo + bắt xác nhận lại (không chặn cứng)
+  const balance = Number(amtEl?.dataset?.balance || 0);
+  if (balance > 0 && amount > balance) {
+    const ok = await confirmDialog({
+      title: 'Vượt công nợ',
+      message: `Số tiền ${fmtMoney(amount)} ₫ <strong>vượt công nợ còn lại ${fmtMoney(balance)} ₫</strong>. Bạn chắc chắn muốn ghi nhận?`,
+      type: 'warning', okText: 'Vẫn ghi nhận',
+    });
+    if (!ok) return;
+  }
+
   try {
     const r = await api('kanban.payment.add', { cardId, amount, note });
-    toast(r.pending ? 'Đã ghi khoản — chờ KTHC xác nhận' : 'Đã ghi nhận thanh toán', 'success');
+    toast(r.pending ? `Đã ghi khoản ${fmtMoney(amount)} ₫ — chờ KTHC xác nhận` : `Đã ghi nhận ${fmtMoney(amount)} ₫`, 'success');
     openKanbanCard(cardId);
     loadKanbanBoard({ silent: true });
   } catch (e) { toast(e.message || 'Không ghi được', 'error'); }

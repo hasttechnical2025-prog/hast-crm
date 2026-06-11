@@ -303,7 +303,7 @@ export function renderOrders() {
 
     let paymentQuick = '';
     if (o.paymentStatus !== 'Đã thanh toán' && o.remainingAmount > 0) {
-      paymentQuick = `<button class="quick-status-btn warning" onclick="event.stopPropagation();quickOrderPayment('${o.id}',${o.totalAmount||0},${o.paidAmount||0})" title="Ghi nhận thanh toán">💰 Thanh toán</button>`;
+      paymentQuick = `<button class="quick-status-btn warning" onclick="event.stopPropagation();quickOrderPayment('${o.id}')" title="Ghi nhận thanh toán">💰 Thanh toán</button>`;
     }
 
     return `
@@ -339,31 +339,52 @@ export async function quickOrderStatus(id, newStatus) {
   } catch (e) { toast(e.message, 'error'); }
 }
 
-export async function quickOrderPayment(id, totalAmount, currentPaid) {
-  const remaining = (totalAmount || 0) - (currentPaid || 0);
+// Kanban v3 §12.3: thanh toán hợp nhất về 1 sổ crm_kanban_payments.
+// Nút trên đơn ghi khoản vào thẻ thương mại của đơn (cùng sổ với "Ghi khoản" trên Kanban).
+export async function quickOrderPayment(id) {
+  let sum;
+  try {
+    sum = await api('kanban.payment.summaryByOrder', null, { orderId: id });
+  } catch (e) { toast(e.message, 'error'); return; }
+
+  if (!sum.hasCard) {
+    await alertDialog({ title: 'Thanh toán theo kỳ', message: sum.message || 'Đơn này thanh toán theo kỳ thuê trên Kanban.', type: 'info' });
+    return;
+  }
+  if (!sum.canRecord) { toast('Bạn không có quyền ghi thanh toán cho đơn này', 'error'); return; }
+
+  const fmt = (n) => formatThousands(Math.round(Number(n) || 0)); // #.###
   const input = await promptDialog({
     title: 'Ghi nhận thanh toán',
-    message: `Tổng đơn: <strong>${formatVND(totalAmount)}</strong><br>` +
-             `Đã thanh toán: ${formatVND(currentPaid)}<br>` +
-             `Còn lại: <strong style="color:var(--danger)">${formatVND(remaining)}</strong><br><br>` +
-             `Nhập số tiền thanh toán lần này (VND):`,
-    defaultValue: String(remaining),
-    placeholder: 'VD: 50000000',
+    message:
+      `<div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin-bottom:10px;font-size:13px">` +
+      `<span style="color:var(--ink-3)">Tổng đơn:</span><strong>${fmt(sum.total)} ₫</strong>` +
+      `<span style="color:var(--ink-3)">Đã trả (đã xác nhận):</span><span>${fmt(sum.paidConfirmed)} ₫</span>` +
+      `<span style="color:var(--ink-3)">Còn lại:</span><strong style="color:var(--danger)">${fmt(sum.balance)} ₫</strong>` +
+      (sum.pendingTotal > 0 ? `<span style="color:var(--ink-3)">Chờ xác nhận:</span><span style="color:var(--accent,#F59E0B)">${fmt(sum.pendingTotal)} ₫</span>` : '') +
+      `</div>` +
+      (sum.canConfirm ? '' : '<div style="font-size:11.5px;color:var(--ink-3);margin-bottom:6px">Khoản bạn ghi sẽ ở trạng thái <strong>chờ KTHC xác nhận</strong>.</div>') +
+      `Nhập số tiền thanh toán lần này (VND):`,
+    defaultValue: fmt(sum.balance),
+    placeholder: 'VD: 50.000.000',
   });
   if (input === null) return;
   const amount = parseMoney(input);
-  if (amount <= 0) {
-    toast('Số tiền không hợp lệ', 'error');
-    return;
+  if (amount <= 0) { toast('Số tiền không hợp lệ', 'error'); return; }
+
+  // §12.4: vượt số dư còn lại → cảnh báo + bắt xác nhận lại (không chặn cứng)
+  if (amount > sum.balance) {
+    const ok = await confirmDialog({
+      title: 'Vượt công nợ',
+      message: `Số tiền ${fmt(amount)} ₫ <strong>vượt công nợ còn lại ${fmt(sum.balance)} ₫</strong>. Bạn chắc chắn muốn ghi nhận?`,
+      type: 'warning', okText: 'Vẫn ghi nhận',
+    });
+    if (!ok) return;
   }
-  const newPaid = (currentPaid || 0) + amount;
-  let newStatus = 'Trả một phần';
-  if (newPaid >= totalAmount) newStatus = 'Đã thanh toán';
-  else if (newPaid <= 0) newStatus = 'Chưa thanh toán';
-  
+
   try {
-    await api('order.update', { id: id, paidAmount: newPaid, paymentStatus: newStatus });
-    toast(`Đã ghi nhận thanh toán ${formatVND(amount)}`, 'success');
+    const r = await api('kanban.payment.add', { cardId: sum.cardId, amount });
+    toast(r.pending ? `Đã ghi khoản ${fmt(amount)} ₫ — chờ KTHC xác nhận` : `Đã ghi nhận thanh toán ${fmt(amount)} ₫`, 'success');
     loadOrders();
   } catch (e) { toast(e.message, 'error'); }
 }
@@ -549,18 +570,71 @@ document.addEventListener('input', e => {
   if (e.target && e.target.name === 'shippingFee') recalcTotals();
 });
 
+// ===== Client-side validation helpers (Kanban v3 §12.2) =====
+// Đánh dấu ô lỗi + message thân thiện, KHÔNG để lỗi DB thô lọt ra UI.
+function clearSalesDocErrors() {
+  const form = document.getElementById('form-sales-doc');
+  form.querySelectorAll('.field-invalid').forEach(el => el.classList.remove('field-invalid'));
+  form.querySelectorAll('.field-error-msg').forEach(el => el.remove());
+}
+function markFieldInvalid(fieldEl, msg) {
+  if (!fieldEl) return;
+  fieldEl.classList.add('field-invalid');
+  if (msg) {
+    const m = document.createElement('div');
+    m.className = 'field-error-msg';
+    m.textContent = msg;
+    fieldEl.appendChild(m);
+  }
+}
+// Dịch lỗi DB thô sang message thân thiện
+function friendlySalesError(rawMsg) {
+  const s = String(rawMsg || '');
+  if (/invalid input syntax for type uuid/i.test(s)) return 'Thiếu thông tin bắt buộc (khách hàng/sản phẩm). Vui lòng kiểm tra lại.';
+  if (/violates check constraint|order_type/i.test(s)) return 'Loại đơn không hợp lệ. Vui lòng chọn lại.';
+  if (/null value in column|not-null/i.test(s)) return 'Thiếu trường bắt buộc. Vui lòng điền đầy đủ.';
+  if (/duplicate key|unique/i.test(s)) return 'Dữ liệu bị trùng. Vui lòng kiểm tra lại.';
+  return s || 'Có lỗi xảy ra, vui lòng thử lại.';
+}
+
 document.getElementById('form-sales-doc').addEventListener('submit', async (e) => {
   e.preventDefault();
+  clearSalesDocErrors();
   const data = extractFormData(e.target);
-  // collect items
+  const isQuote = state.salesDocMode === 'quote';
+
+  // 1) Khách hàng bắt buộc
+  if (!data.customerId) {
+    const f = document.getElementById('sd-customer-select')?.closest('.field');
+    markFieldInvalid(f, 'Vui lòng chọn khách hàng.');
+    document.getElementById('sd-customer-select')?.focus();
+    toast('Thiếu khách hàng', 'warning');
+    return;
+  }
+
+  // 2) Loại đơn bắt buộc (chỉ ĐƠN HÀNG)
+  if (!isQuote) {
+    if (!data.orderType) {
+      markFieldInvalid(document.getElementById('sd-field-ordertype'), 'Vui lòng chọn loại đơn.');
+      toast('Vui lòng chọn Loại đơn (Máy bán / Máy thuê / Vật tư)', 'warning');
+      return;
+    }
+  } else {
+    delete data.orderType; // báo giá không có loại đơn
+  }
+
+  // 3) Dòng hàng hợp lệ (ít nhất 1 dòng có sản phẩm + SL > 0)
   const items = [];
+  let badRow = false;
   document.querySelectorAll('#line-items-tbody tr').forEach(tr => {
     const productId = tr.querySelector('.li-product').value;
     const qty = parseFloat(tr.querySelector('.li-qty').value) || 0;
-    if (qty <= 0) return;
+    if (!productId && qty <= 0) return; // dòng trống bỏ qua
+    if (!productId) { badRow = true; tr.querySelector('.li-product').classList.add('field-invalid'); return; }
+    if (qty <= 0) { badRow = true; tr.querySelector('.li-qty').classList.add('field-invalid'); return; }
     const opt = tr.querySelector('.li-product').selectedOptions[0];
     items.push({
-      productId: productId,
+      productId,
       productName: opt ? opt.text : '',
       quantity: qty,
       unit: tr.querySelector('.li-unit').value,
@@ -569,17 +643,11 @@ document.getElementById('form-sales-doc').addEventListener('submit', async (e) =
       vatRate: parseFloat(tr.querySelector('.li-vat').value) || 0,
     });
   });
+  if (badRow) { toast('Có dòng hàng thiếu sản phẩm hoặc số lượng', 'warning'); return; }
   if (items.length === 0) { toast('Vui lòng thêm ít nhất 1 dòng hàng', 'warning'); return; }
   data.items = items;
   if (data.shippingFee) data.shippingFee = Number(data.shippingFee);
 
-  const isQuote = state.salesDocMode === 'quote';
-  // Loại đơn (Kanban v3): bắt buộc với ĐƠN HÀNG (không áp dụng báo giá).
-  if (!isQuote) {
-    if (!data.orderType) { toast('Vui lòng chọn Loại đơn (Máy bán / Máy thuê / Vật tư)', 'warning'); return; }
-  } else {
-    delete data.orderType; // báo giá không có loại đơn
-  }
   try {
     if (state.currentEditing) {
       data.id = state.currentEditing.id;
@@ -591,7 +659,7 @@ document.getElementById('form-sales-doc').addEventListener('submit', async (e) =
     }
     closeAllDrawers();
     if (isQuote) loadQuotes(); else loadOrders();
-  } catch (err) { toast(err.message, 'error'); }
+  } catch (err) { toast(friendlySalesError(err.message), 'error'); }
 });
 
 

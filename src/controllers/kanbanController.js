@@ -457,6 +457,96 @@ async function kanbanPaymentList(currentUser, params) {
   return { payments: snakeToCamel(pays || []) };
 }
 
+/**
+ * Tóm tắt thanh toán cho 1 ĐƠN HÀNG — dùng ở màn Bán hàng (nút "Ghi nhận thanh toán").
+ * Hợp nhất sổ về crm_kanban_payments: tìm thẻ thương mại CHÍNH của đơn (parent_card_id null),
+ * trả Tổng / Đã trả (confirmed) / Còn lại / Chờ xác nhận + cardId để màn đơn ghi khoản chung sổ.
+ */
+async function kanbanPaymentSummaryByOrder(currentUser, params) {
+  const ctx = await getKanbanCtx(currentUser);
+  const orderId = params?.orderId;
+  if (!orderId) { const e = new Error('BAD_REQUEST: Thiếu orderId'); e.code = 'BAD_REQUEST'; throw e; }
+
+  const { data: cards } = await supabase
+    .from('crm_kanban_cards').select('*')
+    .eq('order_id', orderId).eq('track', 'commercial').is('parent_card_id', null);
+  const card = (cards || [])[0];
+  if (!card) {
+    // Đơn thuê máy (không có thẻ thương mại chính) — thanh toán theo kỳ trên Kanban.
+    return { hasCard: false, message: 'Đơn này thanh toán theo kỳ thuê trên Kanban (không có công nợ tổng).' };
+  }
+
+  const fin = await loadFinancials(card.id);
+  const total = Number(fin?.total_amount || 0);
+  const { data: pays } = await supabase
+    .from('crm_kanban_payments').select('*').eq('card_id', card.id)
+    .order('created_at', { ascending: false });
+  const confirmed = (pays || []).filter((p) => p.status === 'confirmed').reduce((s, p) => s + Number(p.amount || 0), 0);
+  const pending = (pays || []).filter((p) => p.status === 'pending').reduce((s, p) => s + Number(p.amount || 0), 0);
+
+  return {
+    hasCard: true,
+    cardId: card.id,
+    total,
+    paidConfirmed: confirmed,
+    balance: Math.max(total - confirmed, 0),
+    pendingTotal: pending,
+    canRecord: !ctx.isReadOnly,
+    canConfirm: ctx.isAdmin || ctx.deptCode === 'KTHC',
+    payments: (pays || []).map((p) => ({
+      id: p.id, amount: p.amount, recordedDept: p.recorded_dept,
+      status: p.status, note: p.note, createdAt: p.created_at,
+    })),
+  };
+}
+
+/**
+ * Hook khi XÓA đơn hàng (gọi từ crudDelete trước khi soft-delete đơn).
+ * Spec §12.1:
+ *  - Nếu thẻ liên quan có số hóa đơn HOẶC khoản payment confirmed → CHẶN xóa
+ *    (chỉ admin được hủy = cancel, không xóa cứng). Non-admin → 403.
+ *  - Ngược lại: set mọi thẻ liên quan status='cancelled' (gỡ board, giữ audit).
+ * Trả về số thẻ đã cancel. Throw nếu bị chặn.
+ */
+async function cancelCardsForOrder(orderId, user) {
+  const { data: cards } = await supabase
+    .from('crm_kanban_cards').select('id, track, status').eq('order_id', orderId);
+  if (!cards || cards.length === 0) return 0;
+
+  const cardIds = cards.map((c) => c.id);
+
+  // Kiểm tra ràng buộc: có số hóa đơn?
+  const { data: fins } = await supabase
+    .from('crm_kanban_financials').select('card_id, invoice_no').in('card_id', cardIds);
+  const hasInvoice = (fins || []).some((f) => f.invoice_no != null && String(f.invoice_no).trim() !== '');
+
+  // Có payment đã xác nhận?
+  const { data: pays } = await supabase
+    .from('crm_kanban_payments').select('card_id, status').in('card_id', cardIds).eq('status', 'confirmed');
+  const hasConfirmedPayment = (pays || []).length > 0;
+
+  if (hasInvoice || hasConfirmedPayment) {
+    if (user.role !== 'admin') {
+      const e = new Error('FORBIDDEN: Đơn đã có hóa đơn hoặc khoản thanh toán đã xác nhận — không thể xóa. Liên hệ admin để hủy.');
+      e.code = 'FORBIDDEN';
+      throw e;
+    }
+    // admin: cho phép hủy (cancel thẻ), không chặn.
+  }
+
+  // Cancel mọi thẻ active của đơn (giữ audit, gỡ khỏi board).
+  const { error } = await supabase
+    .from('crm_kanban_cards').update({ status: 'cancelled' })
+    .eq('order_id', orderId).neq('status', 'cancelled');
+  if (error) throw error;
+
+  for (const c of cards) {
+    await logKanban(c.id, user.id, 'cancel', c.status, 'cancelled',
+      { reason: 'order_deleted', orderId, hadInvoice: hasInvoice, hadConfirmedPayment: hasConfirmedPayment });
+  }
+  return cards.length;
+}
+
 // ============================================================================
 // kanban.move — cổng kéo-nhả v3
 // ============================================================================
@@ -927,9 +1017,11 @@ module.exports = {
   kanbanPaymentAdd,
   kanbanPaymentConfirm,
   kanbanPaymentList,
+  kanbanPaymentSummaryByOrder,
   kanbanNotificationsList,
   kanbanNotificationsRead,
   kanbanDebtScan,
-  // hook
+  // hooks
   createCardsFromOrder,
+  cancelCardsForOrder,
 };

@@ -639,6 +639,13 @@ async function crudDelete(tableName, user, id) {
 
   await crudGet(tableName, user, id);
 
+  // Kanban v3 §12.1: xóa đơn → xử lý thẻ liên quan (cancel; chặn nếu đã có HĐ/payment confirmed).
+  // Chạy TRƯỚC khi soft-delete đơn — nếu bị chặn thì đơn KHÔNG bị xóa.
+  if (tableName === 'crm_orders') {
+    const { cancelCardsForOrder } = require('./kanbanController');
+    await cancelCardsForOrder(id, user); // throw FORBIDDEN nếu vướng ràng buộc
+  }
+
   const { data, error } = await supabase
     .from(tableName)
     .update({

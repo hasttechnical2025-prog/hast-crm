@@ -239,3 +239,10 @@ thue_may TECH_RECOVER→TECH_DONE  acting=KT roles[TP,admin]
 - **Thuê máy:** thẻ kỹ thuật KT (giao→thuê→thu hồi); billing kỳ do KT-NV phụ trách (như vật tư).
 
 **Điểm CC cần hỏi DK khi build:** nguồn sự thật thanh toán (sổ `crm_kanban_payments` vs công nợ trên `crm_orders`) & cách đồng bộ; chu kỳ tạo kỳ thuê (tay/pg_cron); cách guard tab Bán hàng cho KT; có cần bước "Thu hồi máy" cuối kỳ thuê hay giữ đơn giản như lắp máy.
+
+## 12. SỬA TỪ TEST v3 (DK xác nhận — bổ sung)
+1. **Xóa đơn → thẻ:** xóa đơn thì set thẻ liên quan `status='cancelled'` (gỡ khỏi board, vẫn lưu audit). **CHẶN xóa** nếu đơn đã có số hóa đơn HOẶC có khoản payment `confirmed` — chỉ admin được hủy (cancel, không xóa cứng). Hết thẻ orphan.
+2. **Form tạo đơn:** trường bắt buộc đánh dấu `*` đỏ; validate client-side trước submit (highlight + message thân thiện); KHÔNG để lỗi DB thô (vd "invalid input syntax for type uuid") lọt ra UI.
+3. **Hợp nhất thanh toán về 1 sổ `crm_kanban_payments`:** giữ **cả 2 cửa nhập** (nút "Ghi nhận thanh toán" trên đơn + "Ghi khoản" trên thẻ) nhưng **cùng đổ vào 1 sổ**. Cả 2 màn hiện **Tổng / Đã trả (confirmed) / Còn lại / Chờ xác nhận**. Giữ quy tắc KD nhập `pending` → KTHC xác nhận mới đối trừ. Bỏ ghi `paid_amount` riêng trên đơn.
+4. **Format tiền `#.###`** ở mọi ô/hiển thị tiền. Khi tiền thanh toán > số dư còn lại → cảnh báo "Vượt công nợ còn lại X, kiểm tra lại?" + bắt xác nhận lại (không chặn cứng).
+5. **Mỹ thuật "Loại đơn":** 3 thẻ chọn (selectable card), icon trên + nhãn dưới căn giữa, trạng thái chọn theo màu thương hiệu, hover/transition, mobile xếp dọc.

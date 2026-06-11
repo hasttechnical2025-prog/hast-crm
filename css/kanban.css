@@ -270,6 +270,19 @@
 .kanban-card-addr { font-size: 10.5px; color: var(--ink-3); margin-bottom: 4px; display: inline-flex; gap: 3px; align-items: center; }
 
 /* ===== Payments ledger (drawer) ===== */
+.kbd-pay-summary {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px;
+}
+.kbd-pay-summary > div {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper-2);
+}
+.kbd-pay-summary span { font-size: 10.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.03em; }
+.kbd-pay-summary strong { font-size: 13.5px; color: var(--navy-900); }
+.kbd-pay-summary strong.ok { color: #065F46; }
+.kbd-pay-summary strong.danger { color: var(--danger); }
+.kbd-pay-summary strong.warn { color: #92400E; }
+@media (max-width: 560px) { .kbd-pay-summary { grid-template-columns: repeat(2, 1fr); } }
 .kbd-pay-add { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
 .kbd-pay-add input { flex: 1; min-width: 110px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--line); border-radius: 6px; }
 .kbd-pay-hint { font-size: 11px; color: var(--ink-3); margin-bottom: 10px; }
