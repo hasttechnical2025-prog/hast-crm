@@ -745,37 +745,36 @@ async function kanbanRentalPeriodCreate(currentUser, payload) {
 // AUTO-CREATE HOOK — sinh thẻ từ đơn hàng (§2). Gọi từ crudController.
 // ============================================================================
 
-function classifyCardType(products) {
-  // products: [{category, is_for_rent}]
-  const isMachine = products.some((p) =>
-    p.category && /máy photocopy|photocopy|máy in/i.test(String(p.category)));
-  const isRent = products.some((p) => p.is_for_rent);
-  if (isMachine && isRent) return 'thue_may';
-  if (isMachine) return 'ban_may';
-  return 'ban_vat_tu';
-}
+const VALID_ORDER_TYPES = ['ban_may', 'thue_may', 'ban_vat_tu'];
 
 /**
  * Gọi sau khi crm_orders được tạo. order = row vừa insert; orderItems = mảng items đã insert.
  * creator = user tạo đơn (để lấy owner_dept).
+ *
+ * Kanban v3 (chốt DK 2026-06-11): card_type đọc THẲNG từ order.order_type
+ * (radio bắt buộc trên form), KHÔNG đoán từ sản phẩm. owner_dept = phòng tạo đơn.
  */
 async function createCardsFromOrder(order, orderItems, creator) {
   try {
     if (!order || !order.id) return;
 
-    // Lấy product info cho từng item (category, is_for_rent, cost_price)
+    // Bỏ qua đơn không có order_type (đơn cũ trước v3) — không sinh thẻ.
+    const cardType = order.order_type;
+    if (!VALID_ORDER_TYPES.includes(cardType)) {
+      console.warn('[kanban] order', order.code || order.id, 'không có order_type hợp lệ → bỏ qua sinh thẻ');
+      return;
+    }
+
+    // Lấy product info cho từng item (cost_price snapshot)
     const productIds = (orderItems || []).map((it) => it.product_id).filter(Boolean);
     const prodMap = new Map();
     if (productIds.length > 0) {
       const { data: prods } = await supabase
         .from('crm_products')
-        .select('id, name, code, unit, category, is_for_rent, cost_price, list_price, price')
+        .select('id, name, code, unit, cost_price, list_price, price')
         .in('id', productIds);
       (prods || []).forEach((p) => prodMap.set(p.id, p));
     }
-
-    const productsForClass = (orderItems || []).map((it) => prodMap.get(it.product_id) || {});
-    const cardType = classifyCardType(productsForClass);
 
     // owner_dept = code phòng người tạo đơn
     let originDept = 'KD';

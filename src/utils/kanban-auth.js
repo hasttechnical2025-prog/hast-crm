@@ -37,8 +37,10 @@ async function getKanbanCtx(currentUser) {
   const isAdmin = appRole === 'admin';
   const isReadOnly = appRole === 'boss'; // boss chỉ xem, admin được ghi.
 
-  // Resolve dept code
+  // Resolve dept code + danh sách user cùng phòng (để xác định "phòng tạo đơn"
+  // thấy thẻ kỹ thuật read-only — created_by của thẻ thuộc phòng mình).
   let deptCode = null;
+  let deptUserIds = [];
   if (currentUser.department_id) {
     const { data: dept } = await supabase
       .from('crm_departments')
@@ -46,6 +48,13 @@ async function getKanbanCtx(currentUser) {
       .eq('id', currentUser.department_id)
       .single();
     if (dept) deptCode = (dept.code || '').toUpperCase() || null;
+
+    const { data: mates } = await supabase
+      .from('crm_users')
+      .select('id')
+      .eq('department_id', currentUser.department_id)
+      .eq('is_deleted', false);
+    deptUserIds = (mates || []).map((u) => u.id);
   }
 
   return {
@@ -57,6 +66,7 @@ async function getKanbanCtx(currentUser) {
     isReadOnly,              // boss — chặn mọi ghi
     deptId: currentUser.department_id || null,
     deptCode,                // 'KD' | 'KT' | 'KTHC' | null
+    deptUserIds,             // id user cùng phòng (gồm chính mình)
   };
 }
 

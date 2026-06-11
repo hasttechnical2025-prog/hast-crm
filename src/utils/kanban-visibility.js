@@ -87,13 +87,13 @@ function maskFinancials(finRow, groupModes) {
 }
 
 /**
- * Cột hiển thị theo track + phòng (§1A):
+ * Cột hiển thị theo track + phòng (§1A + chốt DK 2026-06-11):
  *  - admin/boss: tất cả (boss read-only).
- *  - KD: cột commercial + cột technical (technical LUÔN read-only — KD xem, không kéo).
- *  - KT: cột technical + cột commercial (thẻ lọc riêng ở canSeeCard).
- *  - KTHC: cột commercial TRỪ COM_NEW (không thấy "Đơn mới").
- * readOnly per cột = phòng user KHÔNG có transition nào acting từ cột đó
- * (config-driven — đổi transitions là đổi quyền kéo, không sửa code).
+ *  - KT (phòng lắp máy): cột technical (kéo được) + cột commercial (thẻ vật tư/kỳ của KT).
+ *  - Phòng tạo đơn khác KT (vd KD): cột commercial (của mình) + cột technical read-only
+ *    (theo dõi máy đơn mình bán, không kéo).
+ *  - KTHC: cột commercial TRỪ COM_NEW.
+ * readOnly per cột = phòng user KHÔNG có transition nào acting từ cột đó (config-driven).
  */
 function visibleColumnsFor(ctx, allStages, allTransitions) {
   const sorted = allStages.slice().sort((a, b) => a.sort_order - b.sort_order);
@@ -105,33 +105,33 @@ function visibleColumnsFor(ctx, allStages, allTransitions) {
   const myDept = ctx.deptCode;
   if (!myDept) return [];
 
-  // Stage mà phòng user kéo được từ đó (theo transitions)
   const actingFrom = new Set(
     allTransitions.filter((t) => t.acting_dept === myDept).map((t) => t.from_stage)
   );
 
   let visible;
-  if (myDept === 'KD') {
-    visible = sorted; // commercial + technical (technical sẽ readOnly vì KD không acting)
-  } else if (myDept === 'KT') {
-    visible = sorted; // technical + commercial (thẻ thương mại lọc theo owner_dept=KT ở canSeeCard)
-  } else if (myDept === 'KTHC') {
+  if (myDept === 'KTHC') {
     visible = sorted.filter((s) => s.track === 'commercial' && s.id !== 'COM_NEW');
   } else {
-    return [];
+    // Mọi phòng bán hàng (KD, KT, …): thấy cả commercial + technical.
+    // Cột technical readOnly nếu phòng không phải KT (không acting trên TECH_*).
+    visible = sorted;
   }
 
   return visible.map((s) => ({ stage: s, readOnly: !actingFrom.has(s.id) }));
 }
 
 /**
- * Quyền XEM thẻ trong cột (§5.1 + §1A):
+ * Quyền XEM thẻ trong cột (§5.1 + §1A + chốt DK 2026-06-11):
  *  - admin/boss: mọi thẻ.
- *  - technical card: KT (TP: hết; NV: assigned mình/chưa giao). KD chỉ-xem
- *    (TP: hết; NV: thẻ sinh từ đơn mình tạo — created_by). KTHC: không.
+ *  - technical card:
+ *      KT (phòng lắp): TP hết; NV assigned-mình/chưa-giao. KT kéo.
+ *      Phòng TẠO ĐƠN (created_by thuộc phòng mình) ≠ KT: read-only —
+ *      TP thấy mọi thẻ KT của đơn phòng mình; NV thấy thẻ của đơn mình tạo.
+ *      Phòng khác: không.
  *  - commercial card:
- *    - KTHC: mọi thẻ (TP + NV — phòng xử lý tập trung).
- *    - KD/KT: chỉ thẻ owner_dept = phòng mình (TP: hết; NV: assigned mình/chưa giao).
+ *      KTHC: mọi thẻ.
+ *      Phòng tạo đơn (owner_dept=phòng mình): TP hết; NV assigned-mình/chưa-giao.
  */
 function canSeeCard(ctx, card, stageVisibilityMap) {
   if (ctx.isAdmin || ctx.role === 'boss') return true;
@@ -141,16 +141,19 @@ function canSeeCard(ctx, card, stageVisibilityMap) {
   const isTP = ctx.role === 'truong_phong';
   const isOwnAssigned = card.assigned_to && card.assigned_to === ctx.userId;
   const isUnassigned = !card.assigned_to;
+  const deptUserIds = ctx.deptUserIds || [];
+  const createdByMyDept = card.created_by && deptUserIds.includes(card.created_by);
 
   if (card.track === 'technical') {
     if (myDept === 'KT') return isTP || isOwnAssigned || isUnassigned;
-    if (myDept === 'KD') return isTP || card.created_by === ctx.userId; // theo dõi máy của đơn mình
-    return false; // KTHC không thấy kỹ thuật
+    // Phòng tạo đơn (không phải KT) — read-only, theo dõi máy đơn mình.
+    if (isTP) return createdByMyDept;
+    return card.created_by === ctx.userId;
   }
 
   // commercial
   if (myDept === 'KTHC') return true;
-  if (card.owner_dept !== myDept) return false; // KT không thấy thẻ thương mại máy, KD không thấy vật tư
+  if (card.owner_dept !== myDept) return false; // không thấy thẻ thương mại của phòng khác
   return isTP || isOwnAssigned || isUnassigned;
 }
 

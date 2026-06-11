@@ -1002,6 +1002,21 @@ a { color: inherit; text-decoration: none; }
 }
 .form-section-title:first-child { margin-top: 0; }
 
+/* Loại đơn (Kanban v3) — radio bắt buộc trên form đơn hàng */
+.order-type-radios { display: flex; gap: 8px; flex-wrap: wrap; }
+.order-type-radios .ot-radio {
+  flex: 1; min-width: 120px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px;
+  cursor: pointer; font-size: 13px; font-weight: 500; color: var(--ink-2);
+  transition: all 0.12s; user-select: none; margin: 0;
+}
+.order-type-radios .ot-radio:hover { border-color: var(--navy-400, var(--navy-600)); background: var(--paper-2); }
+.order-type-radios .ot-radio input { margin: 0; accent-color: var(--navy-700); }
+.order-type-radios .ot-radio:has(input:checked) {
+  border-color: var(--navy-700); background: var(--navy-100); color: var(--navy-900); font-weight: 600;
+}
+
 /* Customer detail */
 .detail-grid {
   display: grid;

@@ -400,6 +400,7 @@ export async function openSalesDocForm(mode, id) {
     document.getElementById('sd-field-issuedate').style.display = isQuote ? '' : 'none';
     document.getElementById('sd-field-validuntil').style.display = isQuote ? '' : 'none';
     document.getElementById('sd-field-deliveryterms').style.display = isQuote ? '' : 'none';
+    document.getElementById('sd-field-ordertype').style.display = isQuote ? 'none' : '';
     document.getElementById('sd-field-orderdate').style.display = isQuote ? 'none' : '';
     document.getElementById('sd-field-deliverydate').style.display = isQuote ? 'none' : '';
     document.getElementById('sd-field-shippingaddress').style.display = isQuote ? 'none' : '';
@@ -448,6 +449,11 @@ export async function openSalesDocForm(mode, id) {
           const inp = form.elements[k];
           if (inp && inp.type !== 'submit') setCustomInputValue(inp, doc[k]);
         });
+        // Radio "Loại đơn" (RadioNodeList): set tường minh để chắc chắn chọn đúng.
+        if (!isQuote && doc.orderType) {
+          const rb = form.querySelector(`input[name="orderType"][value="${doc.orderType}"]`);
+          if (rb) rb.checked = true;
+        }
         (r.items || []).forEach(it => addLineItem(it));
       } catch (e) {
         toast(e.message, 'error');
@@ -568,6 +574,12 @@ document.getElementById('form-sales-doc').addEventListener('submit', async (e) =
   if (data.shippingFee) data.shippingFee = Number(data.shippingFee);
 
   const isQuote = state.salesDocMode === 'quote';
+  // Loại đơn (Kanban v3): bắt buộc với ĐƠN HÀNG (không áp dụng báo giá).
+  if (!isQuote) {
+    if (!data.orderType) { toast('Vui lòng chọn Loại đơn (Máy bán / Máy thuê / Vật tư)', 'warning'); return; }
+  } else {
+    delete data.orderType; // báo giá không có loại đơn
+  }
   try {
     if (state.currentEditing) {
       data.id = state.currentEditing.id;

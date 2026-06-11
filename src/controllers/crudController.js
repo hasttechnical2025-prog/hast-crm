@@ -3,29 +3,19 @@ const { snakeToCamel, camelToSnake } = require('../utils/helpers');
 const { generateSalt, hashPassword } = require('../utils/crypto');
 
 // =====================================
-// KT SALES-TAB GUARD (Kanban v3 §5.3)
-// KT không được thấy giá máy ở bất cứ đâu → KT chỉ thấy đơn/báo giá của PHÒNG KT,
-// kể cả khi được assign chéo. Chặn cứng department_id ở server.
+// SALES-TAB DEPT GUARD (Kanban v3 §5.3, chốt DK 2026-06-11)
+// MỖI PHÒNG chỉ thấy/mở ĐƠN HÀNG + BÁO GIÁ của phòng mình (không hardcode KD/KT).
+// Giá máy nằm ở đơn → cô lập theo phòng tạo đơn để không lộ chéo (KT không thấy
+// giá máy KD bán, và ngược lại). Chặn cứng department_id ở server, kể cả assign chéo.
 // =====================================
-const _deptCodeCache = new Map(); // department_id → code
-async function getDeptCode(departmentId) {
-  if (!departmentId) return null;
-  if (_deptCodeCache.has(departmentId)) return _deptCodeCache.get(departmentId);
-  const { data } = await supabase
-    .from('crm_departments').select('code').eq('id', departmentId).maybeSingle();
-  const code = data?.code ? String(data.code).toUpperCase() : null;
-  _deptCodeCache.set(departmentId, code);
-  return code;
-}
+// Bảng chứa giá → cô lập theo phòng.
+const DEPT_RESTRICTED_TABLES = ['crm_orders', 'crm_quotes'];
 
-// Bảng có thể chứa giá máy mà KT KHÔNG được xem ngoài phòng mình.
-const KT_RESTRICTED_TABLES = ['crm_orders', 'crm_quotes'];
-
-async function isKTRestricted(user, tableName) {
-  if (!KT_RESTRICTED_TABLES.includes(tableName)) return false;
+// Trả về true nếu cần chặn cứng theo department_id của user.
+function isDeptRestricted(user, tableName) {
+  if (!DEPT_RESTRICTED_TABLES.includes(tableName)) return false;
   if (user.role === 'admin' || user.role === 'boss') return false; // admin/boss xem hết
-  const code = await getDeptCode(user.department_id);
-  return code === 'KT';
+  return !!user.department_id; // mọi phòng có department_id đều bị cô lập
 }
 
 // =====================================
@@ -162,8 +152,8 @@ async function crudList(tableName, user, params) {
   const filterResult = await applyPermissionFilter(query, user, hasDeptField, hasAssignedField, tableName);
   query = filterResult.q;
 
-  // KT guard (§5.3): chặn cứng đơn/báo giá ngoài phòng KT — không cho assigned_to escape.
-  if (await isKTRestricted(user, tableName)) {
+  // Dept guard (§5.3): mỗi phòng chỉ thấy đơn/báo giá của phòng mình — không cho assigned_to escape.
+  if (isDeptRestricted(user, tableName)) {
     query = query.eq('department_id', user.department_id);
   }
 
@@ -243,8 +233,8 @@ async function crudGet(tableName, user, id) {
     throw err;
   }
 
-  // KT guard (§5.3): KT chỉ mở được đơn/báo giá của phòng KT — chặn giá máy của KD.
-  if (await isKTRestricted(user, tableName)) {
+  // Dept guard (§5.3): mỗi phòng chỉ mở đơn/báo giá của phòng mình — chặn lộ giá chéo phòng.
+  if (isDeptRestricted(user, tableName)) {
     if (data.department_id !== user.department_id) {
       const err = new Error('FORBIDDEN: Bạn không có quyền truy cập bản ghi này');
       err.code = 'FORBIDDEN';

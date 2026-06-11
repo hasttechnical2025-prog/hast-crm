@@ -1510,6 +1510,14 @@
           <label>Khách hàng *</label>
           <select name="customerId" required id="sd-customer-select"><option value="">-- Chọn khách hàng --</option></select>
         </div>
+        <div class="field full" id="sd-field-ordertype" style="display:none">
+          <label>Loại đơn * <span style="font-weight:400;color:var(--ink-3);font-size:11px">(quyết định luồng Kanban)</span></label>
+          <div class="order-type-radios">
+            <label class="ot-radio"><input type="radio" name="orderType" value="ban_may"><span>🖨️ Máy bán</span></label>
+            <label class="ot-radio"><input type="radio" name="orderType" value="thue_may"><span>📄 Máy thuê</span></label>
+            <label class="ot-radio"><input type="radio" name="orderType" value="ban_vat_tu"><span>🔧 Vật tư / Dịch vụ</span></label>
+          </div>
+        </div>
         <div class="field" id="sd-field-issuedate">
           <label>Ngày báo giá</label>
           <input type="text" data-format="date" name="issueDate" />
