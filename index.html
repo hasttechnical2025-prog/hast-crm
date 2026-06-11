@@ -857,15 +857,14 @@
         </div>
       </section>
 
-      <!-- ============ TAB KANBAN v2 (spec §8 — đập bỏ Phase 4B cũ) ============ -->
+      <!-- ============ TAB KANBAN v3 (mô hình hai luồng — spec §1A/§8) ============ -->
       <section class="tab-panel" data-panel="workflow">
         <div class="page-header">
           <div>
-            <h1 class="page-title">Kanban liên phòng</h1>
-            <div class="page-subtitle">Bán máy · Cho thuê máy · Bán vật tư — luồng KD → KT → KTHC</div>
+            <h1 class="page-title">Quy trình</h1>
+            <div class="page-subtitle">Thẻ sinh tự động từ đơn hàng · Luồng thương mại (tiền) + Luồng kỹ thuật (lắp máy)</div>
           </div>
           <div class="page-actions">
-            <button class="btn btn-primary btn-sm" onclick="openCreateKanbanCardForm()"><i data-lucide="plus" style="width:14px;height:14px"></i> Tạo thẻ mới</button>
             <button class="kanban-notif-btn" onclick="openKanbanNotifPanel()" title="Thông báo Kanban">
               <i data-lucide="bell" style="width:14px;height:14px"></i> Thông báo
               <span id="kanban-notif-badge"></span>
@@ -876,19 +875,17 @@
 
         <div class="kanban-toolbar">
           <label>
-            <select class="kanban-filter" onchange="setKanbanCardTypeFilter(this.value)">
-              <option value="">Tất cả loại thẻ</option>
-              <option value="ban_may">Bán máy</option>
-              <option value="thue_may">Cho thuê máy (hợp đồng)</option>
-              <option value="thue_may_ky">Kỳ thuê</option>
-              <option value="ban_vat_tu">Bán vật tư</option>
+            <select class="kanban-filter" onchange="setKanbanTrackFilter(this.value)">
+              <option value="">Cả hai luồng</option>
+              <option value="commercial">Chỉ luồng thương mại</option>
+              <option value="technical">Chỉ luồng kỹ thuật</option>
             </select>
           </label>
           <span class="kanban-total">Tổng thẻ: <strong id="kanban-total-count">0</strong></span>
         </div>
 
-        <div id="kanban-board" class="kanban-board-grid">
-          <div class="empty-state" style="grid-column:1/-1"><div class="spinner dark"></div> Đang tải Kanban...</div>
+        <div id="kanban-board">
+          <div class="empty-state" style="padding:40px"><div class="spinner dark"></div> Đang tải Kanban...</div>
         </div>
       </section>
 

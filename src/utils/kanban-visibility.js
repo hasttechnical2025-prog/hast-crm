@@ -1,17 +1,21 @@
 /**
- * Kanban v2 — Visibility & permission matrix.
- * Tham chiếu: plans/kanban_rebuild_spec.md §5.
+ * Kanban v3 — Visibility & permission theo MÔ HÌNH HAI LUỒNG.
+ * Tham chiếu: plans/kanban_rebuild_spec.md §1A (ưu tiên cao nhất) + §5.
  *
- * Vai trò (mapping app role → spec role):
- *   admin   → effRole='boss', isAdmin=true  (toàn quyền — bao gồm GHI)
- *   boss    → effRole='boss', isReadOnly=true (chỉ XEM; mọi ghi -> 403)
- *   manager → effRole='truong_phong'
- *   staff   → effRole='nhan_vien'
+ * Track:
+ *   commercial — thẻ thương mại (dòng tiền): phòng tạo đơn + KTHC + admin/boss.
+ *   technical  — thẻ kỹ thuật (lắp/giao máy): KT kéo; KD CHỈ XEM; KTHC không thấy.
  *
- * Tài chính chia 4 nhóm: selling, cost, billing, debt.
- * Mỗi nhóm có 3 mode: 'write' | 'read' | null (server không gửi xuống).
- * 'write_own' = chỉ áp dụng khi card.assigned_to = user.id; ngoài ra → null.
- * 'read_own'  = đọc (không sửa) — chỉ áp dụng khi card.assigned_to = user.id.
+ * Vai (ánh xạ ở kanban-auth.js):
+ *   admin → toàn quyền · boss → chỉ-xem mọi thứ · manager → truong_phong · staff → nhan_vien.
+ *
+ * Ma trận field thẻ THƯƠNG MẠI (§5.2 v3):
+ *   | nhóm    | admin | phòng-tạo-đơn | KTHC | boss |
+ *   | selling |   ✓   |       ✓       |  ✓   | đọc  |
+ *   | cost    |   ✓   |       ✗       |  ✓   | đọc  |
+ *   | billing |   ✓   |      đọc      |  ✓   | đọc  |
+ *   | debt    |   ✓   |      đọc      |  ✓   | đọc  |
+ * Thẻ KỸ THUẬT: KHÔNG tài chính với mọi vai (server không trả financials).
  */
 
 const FIN_FIELDS_BY_GROUP = {
@@ -23,75 +27,28 @@ const FIN_FIELDS_BY_GROUP = {
 
 const ALL_FIN_FIELDS = Object.values(FIN_FIELDS_BY_GROUP).flat();
 
-// "Family" của thẻ — nhóm 3 loại thẻ máy chung 1 ma trận, vật tư riêng.
-function cardFamily(cardType) {
-  return cardType === 'ban_vat_tu' ? 'vat_tu' : 'may';
-}
-
-// Ma trận §5.4. Đầu vào: family + effRole + deptCode → object {selling, cost, billing, debt}.
-// Mỗi giá trị: 'write' | 'read' | 'write_own' | 'read_own' | null.
-const MATRIX = {
-  may: {
-    // Boss/admin xem mọi thứ; admin còn write được, boss read-only — phân biệt ở chỗ khác.
-    boss: { _any: { selling: 'write', cost: 'write', billing: 'write', debt: 'write' } },
-    truong_phong: {
-      KD:   { selling: 'write', cost: null,    billing: 'read', debt: 'read' },
-      KT:   { selling: null,    cost: null,    billing: null,   debt: null   },
-      KTHC: { selling: 'write', cost: 'write', billing: 'write',debt: 'write'},
-    },
-    nhan_vien: {
-      KD:   { selling: 'write_own', cost: null, billing: 'read_own', debt: 'read_own' },
-      KT:   { selling: null,        cost: null, billing: null,        debt: null       },
-      KTHC: { selling: 'write',     cost: 'write', billing: 'write', debt: 'write' },
-    },
-  },
-  vat_tu: {
-    boss: { _any: { selling: 'write', cost: 'write', billing: 'write', debt: 'write' } },
-    truong_phong: {
-      KT:   { selling: 'write', cost: 'write', billing: 'read', debt: null  },
-      KTHC: { selling: 'write', cost: 'write', billing: 'write',debt: 'write' },
-    },
-    nhan_vien: {
-      KT:   { selling: 'write_own', cost: null, billing: null, debt: null },
-      KTHC: { selling: 'write', cost: 'write', billing: 'write', debt: 'write' },
-    },
-  },
-};
-
 /**
- * Trả về group→mode cho user trên 1 thẻ cụ thể.
- * @param {object} ctx — kanban auth context (xem kanban-auth.js)
- * @param {object} card — { card_type, assigned_to }
- * @returns {{selling, cost, billing, debt}} mỗi giá trị 'write'|'read'|null
+ * Trả về group→mode cho user trên 1 thẻ. 'write' | 'read' | null (không gửi).
  */
 function fieldGroupsFor(ctx, card) {
-  const family = cardFamily(card.card_type);
-  const effRole = ctx.role;
-  const cell = MATRIX[family]?.[effRole];
-  let groups;
-  if (!cell) {
-    groups = { selling: null, cost: null, billing: null, debt: null };
-  } else if (cell._any) {
-    groups = { ...cell._any };
-  } else {
-    groups = cell[ctx.deptCode] || { selling: null, cost: null, billing: null, debt: null };
-  }
+  const NONE = { selling: null, cost: null, billing: null, debt: null };
 
-  const isOwn = card.assigned_to && ctx.userId && card.assigned_to === ctx.userId;
-  // Resolve *_own modes
-  const out = {};
-  for (const g of ['selling', 'cost', 'billing', 'debt']) {
-    const m = groups[g];
-    if (m === 'write_own') out[g] = isOwn ? 'write' : null;
-    else if (m === 'read_own') out[g] = isOwn ? 'read' : null;
-    else out[g] = m;
+  // Thẻ kỹ thuật: KHÔNG tài chính cho bất kỳ ai (kể cả admin/boss — thẻ này không mang giá).
+  if (card.track === 'technical') return { ...NONE };
+
+  if (ctx.isAdmin) return { selling: 'write', cost: 'write', billing: 'write', debt: 'write' };
+  if (ctx.role === 'boss') return { selling: 'read', cost: 'read', billing: 'read', debt: 'read' };
+
+  if (ctx.deptCode === 'KTHC') {
+    return { selling: 'write', cost: 'write', billing: 'write', debt: 'write' };
   }
-  return out;
+  // Phòng tạo đơn (KD với máy/thuê; KT với vật tư/kỳ thuê)
+  if (ctx.deptCode && card.owner_dept === ctx.deptCode) {
+    return { selling: 'write', cost: null, billing: 'read', debt: 'read' };
+  }
+  return { ...NONE };
 }
 
-/**
- * Tập group được xem (read hoặc write).
- */
 function viewableGroupsSet(groupModes) {
   const s = new Set();
   for (const g of ['selling', 'cost', 'billing', 'debt']) {
@@ -100,10 +57,6 @@ function viewableGroupsSet(groupModes) {
   return s;
 }
 
-/**
- * Tập group được SỬA.
- * Lưu ý: boss read-only -> tất cả group về null khi sửa (kiểm tra ở ctx.isReadOnly).
- */
 function editableGroupsSet(ctx, groupModes) {
   if (ctx.isReadOnly) return new Set();
   const s = new Set();
@@ -114,11 +67,8 @@ function editableGroupsSet(ctx, groupModes) {
 }
 
 /**
- * Lọc payload financials xuống chỉ những field thuộc group user được xem.
- * Field 'currency' luôn giữ.
- * Mỗi field còn giữ tag mode='write'|'read' để frontend khóa input nếu 'read'.
- *
- * Trả null nếu user không xem được nhóm nào.
+ * Lọc payload financials theo group được xem. 'currency' luôn giữ.
+ * Kèm _modes để FE khóa input nhóm 'read'. Trả null nếu không xem được gì.
  */
 function maskFinancials(finRow, groupModes) {
   if (!finRow) return null;
@@ -131,82 +81,82 @@ function maskFinancials(finRow, groupModes) {
     for (const f of fields) {
       if (f in finRow) out[f] = finRow[f];
     }
-    out._modes[group] = groupModes[group]; // 'write' | 'read'
+    out._modes[group] = groupModes[group];
   }
   return out;
 }
 
 /**
- * Chuyển danh sách stages + transitions thành visibleColumnsFor(ctx).
- * Trả về [{ stage, readOnly }] theo sort_order.
+ * Cột hiển thị theo track + phòng (§1A):
+ *  - admin/boss: tất cả (boss read-only).
+ *  - KD: cột commercial + cột technical (technical LUÔN read-only — KD xem, không kéo).
+ *  - KT: cột technical + cột commercial (thẻ lọc riêng ở canSeeCard).
+ *  - KTHC: cột commercial TRỪ COM_NEW (không thấy "Đơn mới").
+ * readOnly per cột = phòng user KHÔNG có transition nào acting từ cột đó
+ * (config-driven — đổi transitions là đổi quyền kéo, không sửa code).
  */
 function visibleColumnsFor(ctx, allStages, allTransitions) {
-  // Boss/admin: tất cả cột, đều editable theo permission của transitions.
-  if (ctx.role === 'boss') {
-    return allStages
-      .slice()
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((s) => ({ stage: s, readOnly: false }));
+  const sorted = allStages.slice().sort((a, b) => a.sort_order - b.sort_order);
+
+  if (ctx.isAdmin || ctx.role === 'boss') {
+    return sorted.map((s) => ({ stage: s, readOnly: ctx.isReadOnly }));
   }
 
   const myDept = ctx.deptCode;
-  if (!myDept) {
-    // No dept (uncommon) → no columns.
+  if (!myDept) return [];
+
+  // Stage mà phòng user kéo được từ đó (theo transitions)
+  const actingFrom = new Set(
+    allTransitions.filter((t) => t.acting_dept === myDept).map((t) => t.from_stage)
+  );
+
+  let visible;
+  if (myDept === 'KD') {
+    visible = sorted; // commercial + technical (technical sẽ readOnly vì KD không acting)
+  } else if (myDept === 'KT') {
+    visible = sorted; // technical + commercial (thẻ thương mại lọc theo owner_dept=KT ở canSeeCard)
+  } else if (myDept === 'KTHC') {
+    visible = sorted.filter((s) => s.track === 'commercial' && s.id !== 'COM_NEW');
+  } else {
     return [];
   }
 
-  // Stage thuộc phòng mình → editable
-  const myStages = new Set(allStages.filter((s) => s.owner_dept === myDept).map((s) => s.id));
-
-  // Neighbor stages: bất kỳ stage X mà có transition (forward) giữa X và 1 stage trong myStages.
-  const neighbors = new Set();
-  for (const t of allTransitions) {
-    if (t.direction !== 'forward') continue;
-    if (myStages.has(t.from_stage) && !myStages.has(t.to_stage)) neighbors.add(t.to_stage);
-    if (myStages.has(t.to_stage) && !myStages.has(t.from_stage)) neighbors.add(t.from_stage);
-  }
-
-  return allStages
-    .filter((s) => myStages.has(s.id) || neighbors.has(s.id))
-    .sort((a, b) => a.sort_order - b.sort_order)
-    .map((s) => ({ stage: s, readOnly: !myStages.has(s.id) }));
+  return visible.map((s) => ({ stage: s, readOnly: !actingFrom.has(s.id) }));
 }
 
 /**
- * Quyền XEM thẻ trong cột:
- *   - Boss/admin: thấy mọi thẻ.
- *   - TP: thẻ ở stage editable (phòng mình): tất cả; ở stage read-only: chỉ thẻ owner_dept=phòng mình HOẶC assigned_to=mình.
- *   - NV: thẻ ở stage editable: assigned_to=mình HOẶC unassigned (assigned_to IS NULL) ; ở stage read-only: assigned_to=mình.
- *
- * @param {object} ctx
- * @param {object} card
- * @param {Map<string, {readOnly:boolean}>} stageVisibilityMap — key = stage id
- * @returns {boolean}
+ * Quyền XEM thẻ trong cột (§5.1 + §1A):
+ *  - admin/boss: mọi thẻ.
+ *  - technical card: KT (TP: hết; NV: assigned mình/chưa giao). KD chỉ-xem
+ *    (TP: hết; NV: thẻ sinh từ đơn mình tạo — created_by). KTHC: không.
+ *  - commercial card:
+ *    - KTHC: mọi thẻ (TP + NV — phòng xử lý tập trung).
+ *    - KD/KT: chỉ thẻ owner_dept = phòng mình (TP: hết; NV: assigned mình/chưa giao).
  */
 function canSeeCard(ctx, card, stageVisibilityMap) {
-  if (ctx.role === 'boss') return true;
-  const visEntry = stageVisibilityMap.get(card.current_stage);
-  if (!visEntry) return false;
-  const isReadOnlyStage = visEntry.readOnly;
-  const myDept = ctx.deptCode;
-  const isOwn = card.assigned_to && card.assigned_to === ctx.userId;
+  if (ctx.isAdmin || ctx.role === 'boss') return true;
+  if (!stageVisibilityMap.has(card.current_stage)) return false;
 
-  if (!isReadOnlyStage) {
-    // editable stage thuộc phòng mình
-    if (ctx.role === 'truong_phong') return true;
-    if (ctx.role === 'nhan_vien') return isOwn || !card.assigned_to;
-  } else {
-    // read-only neighbor stage
-    if (ctx.role === 'truong_phong') return card.owner_dept === myDept || isOwn;
-    if (ctx.role === 'nhan_vien') return isOwn;
+  const myDept = ctx.deptCode;
+  const isTP = ctx.role === 'truong_phong';
+  const isOwnAssigned = card.assigned_to && card.assigned_to === ctx.userId;
+  const isUnassigned = !card.assigned_to;
+
+  if (card.track === 'technical') {
+    if (myDept === 'KT') return isTP || isOwnAssigned || isUnassigned;
+    if (myDept === 'KD') return isTP || card.created_by === ctx.userId; // theo dõi máy của đơn mình
+    return false; // KTHC không thấy kỹ thuật
   }
-  return false;
+
+  // commercial
+  if (myDept === 'KTHC') return true;
+  if (card.owner_dept !== myDept) return false; // KT không thấy thẻ thương mại máy, KD không thấy vật tư
+  return isTP || isOwnAssigned || isUnassigned;
 }
 
 module.exports = {
   FIN_FIELDS_BY_GROUP,
   ALL_FIN_FIELDS,
-  cardFamily,
   fieldGroupsFor,
   viewableGroupsSet,
   editableGroupsSet,

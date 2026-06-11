@@ -8,10 +8,13 @@ const {
   kanbanConfigGet,
   kanbanBoardGet,
   kanbanCardGet,
-  kanbanCardCreate,
   kanbanCardUpdate,
+  kanbanCardForceClose,
   kanbanMove,
   kanbanRentalPeriodCreate,
+  kanbanPaymentAdd,
+  kanbanPaymentConfirm,
+  kanbanPaymentList,
   kanbanNotificationsList,
   kanbanNotificationsRead,
   kanbanDebtScan,
@@ -116,7 +119,7 @@ async function handleRequest(req, res) {
       // === Kanban v2 (spec §6) — phá Kanban cũ "workflow.*", thay bằng "kanban.*" ===
       // method: config.get | board.get | card.get | card.create | card.update | move
       //         | rentalPeriod.create | notifications.list | notifications.read | debt.scan
-      const sub = action.substring('kanban.'.length); // ví dụ 'card.create'
+      const sub = action.substring('kanban.'.length); // ví dụ 'payment.add'
       if (sub === 'config.get') {
         result = await kanbanConfigGet(currentUser);
         return res.json({ success: true, data: result });
@@ -126,18 +129,27 @@ async function handleRequest(req, res) {
       } else if (sub === 'card.get') {
         result = await kanbanCardGet(currentUser, params);
         return res.json({ success: true, data: result });
-      } else if (sub === 'card.create') {
-        result = await kanbanCardCreate(currentUser, payload);
-        return res.json({ success: true, data: result, message: 'Tạo thẻ thành công' });
       } else if (sub === 'card.update') {
         result = await kanbanCardUpdate(currentUser, payload);
         return res.json({ success: true, data: result, message: 'Cập nhật thẻ thành công' });
+      } else if (sub === 'card.forceClose') {
+        result = await kanbanCardForceClose(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Đã đóng thẻ (ghi lý do)' });
       } else if (sub === 'move') {
         result = await kanbanMove(currentUser, payload);
         return res.json({ success: true, data: result, message: 'Đã chuyển stage' });
       } else if (sub === 'rentalPeriod.create') {
         result = await kanbanRentalPeriodCreate(currentUser, payload);
         return res.json({ success: true, data: result, message: 'Đã sinh kỳ thuê mới' });
+      } else if (sub === 'payment.add') {
+        result = await kanbanPaymentAdd(currentUser, payload);
+        return res.json({ success: true, data: result, message: result.pending ? 'Đã ghi khoản chờ xác nhận' : 'Đã ghi nhận thanh toán' });
+      } else if (sub === 'payment.confirm') {
+        result = await kanbanPaymentConfirm(currentUser, payload);
+        return res.json({ success: true, data: result, message: 'Đã xác nhận thanh toán' });
+      } else if (sub === 'payment.list') {
+        result = await kanbanPaymentList(currentUser, params);
+        return res.json({ success: true, data: result });
       } else if (sub === 'notifications.list') {
         result = await kanbanNotificationsList(currentUser, params);
         return res.json({ success: true, data: result });

@@ -1,48 +1,35 @@
 /**
- * Kanban v2 — Controller chính (cổng kiểm soát duy nhất).
- * Tham chiếu: plans/kanban_rebuild_spec.md §6.
+ * Kanban v3 — Controller (cổng kiểm soát duy nhất). MÔ HÌNH HAI LUỒNG.
+ * Tham chiếu: plans/kanban_rebuild_spec.md v3 (§1A ưu tiên cao nhất).
  *
  * Actions (qua mainController dispatch):
- *   - kanban.config.get         — stages + transitions cho FE render UI
- *   - kanban.board.get          — đọc board đã lọc theo quyền (§6.3)
- *   - kanban.card.get           — đọc 1 thẻ cho drawer chi tiết
- *   - kanban.card.create        — tạo thẻ + financials + items (§6.5)
- *   - kanban.card.update        — sửa thẻ + financials + items (§6.5)
- *   - kanban.move               — cổng kéo-nhả (§6.4) — DUY NHẤT đổi current_stage
- *   - kanban.rentalPeriod.create — sinh thẻ kỳ thuê từ hợp đồng (§6.6)
- *   - kanban.notifications.list — chuông 🔔 (§6.9)
- *   - kanban.notifications.read — đánh dấu đã đọc
- *   - kanban.debt.scan          — chạy thủ công fn_debt_reminder_scan() — admin only
+ *   - kanban.config.get          — stages(+track) + transitions cho FE
+ *   - kanban.board.get           — board đã lọc theo track + phòng + role; mask field
+ *   - kanban.card.get            — đọc 1 thẻ cho drawer (kèm payments + logs)
+ *   - kanban.card.update         — sửa field theo editableGroupsFor (KTHC hóa đơn/thanh toán)
+ *   - kanban.card.forceClose     — đóng tay / xóa nợ (admin + KTHC-TP), ghi lý do
+ *   - kanban.move                — cổng kéo-nhả; →COM_DONE auto khi số dư=0 (không kéo tay)
+ *   - kanban.rentalPeriod.create — nút "Tạo kỳ thuê" trên thẻ kỹ thuật thue_may TECH_ACTIVE (KT-NV)
+ *   - kanban.payment.add         — ghi khoản thu (KD→pending; KTHC→confirmed)
+ *   - kanban.payment.confirm     — KTHC xác nhận khoản pending → trừ nợ + sync đơn
+ *   - kanban.payment.list        — sổ thanh toán của 1 thẻ
+ *   - kanban.notifications.list/read — chuông 🔔
+ *   - kanban.debt.scan           — chạy thủ công fn_debt_reminder_scan() — admin only
+ *
+ * Auto-create hook (gọi từ crudController sau khi tạo crm_orders): createCardsFromOrder().
+ * KHÔNG còn kanban.card.create thủ công — thẻ sinh từ đơn (§0.3).
  */
 const { supabase } = require('../config');
 const { snakeToCamel } = require('../utils/helpers');
-const {
-  getKanbanCtx,
-  requireWritable,
-} = require('../utils/kanban-auth');
+const { getKanbanCtx, requireWritable } = require('../utils/kanban-auth');
 const {
   FIN_FIELDS_BY_GROUP,
-  ALL_FIN_FIELDS,
   fieldGroupsFor,
   editableGroupsSet,
   maskFinancials,
   visibleColumnsFor,
   canSeeCard,
 } = require('../utils/kanban-visibility');
-
-// Phòng khởi tạo mặc định theo card_type
-const INITIAL_STAGE_BY_CARD_TYPE = {
-  ban_may: 'KD_OPEN',
-  thue_may: 'KD_OPEN',
-  ban_vat_tu: 'KT_PROCESS',
-  thue_may_ky: 'KTHC_INVOICE',
-};
-const INITIAL_DEPT_BY_CARD_TYPE = {
-  ban_may: 'KD',
-  thue_may: 'KD',
-  ban_vat_tu: 'KT',
-  thue_may_ky: 'KTHC',
-};
 
 // ============================================================================
 // HELPERS — DB
@@ -59,11 +46,7 @@ async function loadConfig() {
 }
 
 async function loadCard(id) {
-  const { data, error } = await supabase
-    .from('crm_kanban_cards')
-    .select('*')
-    .eq('id', id)
-    .single();
+  const { data, error } = await supabase.from('crm_kanban_cards').select('*').eq('id', id).single();
   if (error || !data) {
     const e = new Error('NOT_FOUND: Không tìm thấy thẻ');
     e.code = 'NOT_FOUND';
@@ -74,20 +57,14 @@ async function loadCard(id) {
 
 async function loadFinancials(cardId) {
   const { data, error } = await supabase
-    .from('crm_kanban_financials')
-    .select('*')
-    .eq('card_id', cardId)
-    .maybeSingle();
+    .from('crm_kanban_financials').select('*').eq('card_id', cardId).maybeSingle();
   if (error) throw error;
   return data || null;
 }
 
 async function loadCardItems(cardId) {
   const { data, error } = await supabase
-    .from('crm_kanban_card_items')
-    .select('*')
-    .eq('card_id', cardId)
-    .order('position');
+    .from('crm_kanban_card_items').select('*').eq('card_id', cardId).order('position');
   if (error) throw error;
   return data || [];
 }
@@ -102,91 +79,63 @@ async function loadStageMap() {
 async function logKanban(cardId, actorId, action, fromStage, toStage, meta) {
   try {
     await supabase.from('crm_kanban_logs').insert({
-      card_id: cardId,
-      actor_id: actorId,
-      action,
-      from_stage: fromStage || null,
-      to_stage: toStage || null,
-      meta: meta || null,
+      card_id: cardId, actor_id: actorId, action,
+      from_stage: fromStage || null, to_stage: toStage || null, meta: meta || null,
     });
-  } catch (e) {
-    console.error('[kanban] log error', e);
-  }
+  } catch (e) { console.error('[kanban] log error', e); }
 }
 
 // ============================================================================
-// NOTIFICATIONS — emit helpers
+// NOTIFICATIONS
 // ============================================================================
 
 async function insertNotification({ userId, type, title, body, cardId, priority }) {
   if (!userId) return;
   try {
     await supabase.from('crm_notifications').insert({
-      user_id: userId,
-      type,
-      title,
-      message: body || null,
-      entity_type: 'kanban_card',
-      entity_id: cardId || null,
-      card_id: cardId || null,
-      is_read: false,
-      priority: priority || 'normal',
+      user_id: userId, type, title, message: body || null,
+      entity_type: 'kanban_card', entity_id: cardId || null, card_id: cardId || null,
+      is_read: false, priority: priority || 'normal',
     });
-  } catch (e) {
-    console.error('[kanban] notify error', e);
-  }
+  } catch (e) { console.error('[kanban] notify error', e); }
 }
 
 async function notifyUsersOfDept(deptCode, payload) {
   if (!deptCode) return 0;
   const { data: dept } = await supabase
-    .from('crm_departments')
-    .select('id')
-    .ilike('code', deptCode)
-    .maybeSingle();
+    .from('crm_departments').select('id').ilike('code', deptCode).maybeSingle();
   if (!dept) return 0;
   const { data: users } = await supabase
-    .from('crm_users')
-    .select('id')
-    .eq('department_id', dept.id)
-    .eq('is_deleted', false)
-    .eq('status', 'active');
+    .from('crm_users').select('id')
+    .eq('department_id', dept.id).eq('is_deleted', false).eq('status', 'active');
   if (!users || users.length === 0) return 0;
-  for (const u of users) {
-    await insertNotification({ ...payload, userId: u.id });
-  }
+  for (const u of users) await insertNotification({ ...payload, userId: u.id });
   return users.length;
 }
 
 // ============================================================================
-// MASK helper — chuẩn hoá card payload trả về FE
+// MASK — chuẩn hoá card payload cho FE
 // ============================================================================
 
 function maskCardForView(ctx, card, financials, items) {
   const groupModes = fieldGroupsFor(ctx, card);
   const fin = maskFinancials(financials, groupModes);
 
-  // Mask items: snapshot cost_price là nhạy cảm → ẩn nếu group 'cost' không view được.
-  // unit_price thuộc selling. line_subtotal cũng thuộc selling.
   const viewCost = groupModes.cost === 'write' || groupModes.cost === 'read';
   const viewSelling = groupModes.selling === 'write' || groupModes.selling === 'read';
 
+  // Thẻ kỹ thuật: chỉ tên/SL máy (KHÔNG giá). Thẻ thương mại: theo nhóm xem được.
   const maskedItems = (items || []).map((it) => {
     const out = {
-      id: it.id,
-      productId: it.product_id,
-      productName: it.product_name,
-      productCode: it.product_code,
-      unit: it.unit,
-      quantity: it.quantity,
-      position: it.position,
-      notes: it.notes,
+      id: it.id, productId: it.product_id, productName: it.product_name,
+      productCode: it.product_code, unit: it.unit, quantity: it.quantity,
+      position: it.position, notes: it.notes,
     };
-    if (viewSelling) {
+    if (card.track !== 'technical' && viewSelling) {
       out.unitPrice = it.unit_price;
       out.lineSubtotal = it.line_subtotal;
     }
-    if (viewCost) {
+    if (card.track !== 'technical' && viewCost) {
       out.costPrice = it.cost_price;
     }
     return out;
@@ -195,12 +144,15 @@ function maskCardForView(ctx, card, financials, items) {
   return {
     id: card.id,
     cardType: card.card_type,
+    track: card.track,
     title: card.title,
     currentStage: card.current_stage,
     ownerDept: card.owner_dept,
     assignedTo: card.assigned_to,
     customerId: card.customer_id,
     customerName: card.customer_name,
+    customerAddress: card.customer_address,
+    orderId: card.order_id,
     parentCardId: card.parent_card_id,
     periodLabel: card.period_label,
     periodStart: card.period_start,
@@ -215,6 +167,13 @@ function maskCardForView(ctx, card, financials, items) {
   };
 }
 
+function ctxOut(ctx) {
+  return {
+    userId: ctx.userId, role: ctx.role, isAdmin: ctx.isAdmin,
+    isReadOnly: ctx.isReadOnly, deptCode: ctx.deptCode,
+  };
+}
+
 // ============================================================================
 // kanban.config.get
 // ============================================================================
@@ -223,26 +182,15 @@ async function kanbanConfigGet(currentUser) {
   const ctx = await getKanbanCtx(currentUser);
   const { stages, transitions } = await loadConfig();
   return {
-    me: {
-      userId: ctx.userId,
-      role: ctx.role,
-      isAdmin: ctx.isAdmin,
-      isReadOnly: ctx.isReadOnly,
-      deptCode: ctx.deptCode,
-    },
+    me: ctxOut(ctx),
     stages: stages.map((s) => ({
       id: s.id, name: s.name, ownerDept: s.owner_dept,
-      sortOrder: s.sort_order, isTerminal: s.is_terminal,
+      sortOrder: s.sort_order, isTerminal: s.is_terminal, track: s.track,
     })),
     transitions: transitions.map((t) => ({
-      id: t.id,
-      cardType: t.card_type,
-      fromStage: t.from_stage,
-      toStage: t.to_stage,
-      direction: t.direction,
-      allowedRoles: t.allowed_roles,
-      actingDept: t.acting_dept,
-      requireFields: t.require_fields,
+      id: t.id, cardType: t.card_type, fromStage: t.from_stage, toStage: t.to_stage,
+      direction: t.direction, allowedRoles: t.allowed_roles,
+      actingDept: t.acting_dept, requireFields: t.require_fields,
     })),
   };
 }
@@ -258,28 +206,19 @@ async function kanbanBoardGet(currentUser, params) {
   const visibleCols = visibleColumnsFor(ctx, stages, transitions);
   const stageVisMap = new Map(visibleCols.map((c) => [c.stage.id, { readOnly: c.readOnly }]));
   const visibleStageIds = visibleCols.map((c) => c.stage.id);
+  if (visibleStageIds.length === 0) return { me: ctxOut(ctx), columns: [] };
 
-  if (visibleStageIds.length === 0) {
-    return { me: ctxOut(ctx), columns: [] };
-  }
+  let q = supabase.from('crm_kanban_cards').select('*')
+    .eq('status', 'active').in('current_stage', visibleStageIds);
+  if (params && params.track) q = q.eq('track', params.track);
+  const { data: cards, error } = await q.order('updated_at', { ascending: false });
+  if (error) throw error;
 
-  // Lấy cards active trong các stage hiển thị
-  let q = supabase
-    .from('crm_kanban_cards')
-    .select('*')
-    .eq('status', 'active')
-    .in('current_stage', visibleStageIds);
-  if (params && params.cardType) q = q.eq('card_type', params.cardType);
-  const { data: cards, error: cardsErr } = await q.order('updated_at', { ascending: false });
-  if (cardsErr) throw cardsErr;
-
-  // Filter theo §5.2
   const allowed = (cards || []).filter((c) => canSeeCard(ctx, c, stageVisMap));
   const ids = allowed.map((c) => c.id);
 
-  // Bulk-load financials + items
-  let finMap = new Map();
-  let itemsByCard = new Map();
+  const finMap = new Map();
+  const itemsByCard = new Map();
   if (ids.length > 0) {
     const [finRes, itRes] = await Promise.all([
       supabase.from('crm_kanban_financials').select('*').in('card_id', ids),
@@ -294,7 +233,6 @@ async function kanbanBoardGet(currentUser, params) {
     });
   }
 
-  // Group cards by stage
   const cardsByStage = new Map();
   for (const c of allowed) {
     const masked = maskCardForView(ctx, c, finMap.get(c.id) || null, itemsByCard.get(c.id) || []);
@@ -305,23 +243,13 @@ async function kanbanBoardGet(currentUser, params) {
   const columns = visibleCols.map(({ stage, readOnly }) => ({
     stage: {
       id: stage.id, name: stage.name, ownerDept: stage.owner_dept,
-      sortOrder: stage.sort_order, isTerminal: stage.is_terminal,
+      sortOrder: stage.sort_order, isTerminal: stage.is_terminal, track: stage.track,
     },
     readOnly,
     cards: cardsByStage.get(stage.id) || [],
   }));
 
   return { me: ctxOut(ctx), columns };
-}
-
-function ctxOut(ctx) {
-  return {
-    userId: ctx.userId,
-    role: ctx.role,
-    isAdmin: ctx.isAdmin,
-    isReadOnly: ctx.isReadOnly,
-    deptCode: ctx.deptCode,
-  };
 }
 
 // ============================================================================
@@ -331,58 +259,347 @@ function ctxOut(ctx) {
 async function kanbanCardGet(currentUser, params) {
   const ctx = await getKanbanCtx(currentUser);
   const cardId = params?.id || params?.cardId;
-  if (!cardId) {
-    const e = new Error('BAD_REQUEST: Thiếu id thẻ');
-    e.code = 'BAD_REQUEST'; throw e;
+  if (!cardId) { const e = new Error('BAD_REQUEST: Thiếu id thẻ'); e.code = 'BAD_REQUEST'; throw e; }
+  const card = await loadCard(cardId);
+
+  const { stages, transitions } = await loadConfig();
+  const visibleCols = visibleColumnsFor(ctx, stages, transitions);
+  const stageVisMap = new Map(visibleCols.map((c) => [c.stage.id, { readOnly: c.readOnly }]));
+  if (!canSeeCard(ctx, card, stageVisMap)) {
+    const e = new Error('FORBIDDEN: Bạn không có quyền xem thẻ này'); e.code = 'FORBIDDEN'; throw e;
   }
+  const [fin, items] = await Promise.all([loadFinancials(cardId), loadCardItems(cardId)]);
+  const masked = maskCardForView(ctx, card, fin, items);
+
+  // Sổ thanh toán — chỉ với thẻ thương mại + vai thấy được debt/billing
+  let payments = [];
+  const modes = masked._modes;
+  const canSeePayments = card.track === 'commercial' &&
+    (modes.debt === 'write' || modes.debt === 'read' || ctx.isAdmin);
+  if (canSeePayments) {
+    const { data: pays } = await supabase
+      .from('crm_kanban_payments').select('*').eq('card_id', cardId)
+      .order('created_at', { ascending: false });
+    payments = (pays || []).map((p) => ({
+      id: p.id, amount: p.amount, recordedBy: p.recorded_by, recordedDept: p.recorded_dept,
+      status: p.status, confirmedBy: p.confirmed_by, confirmedAt: p.confirmed_at,
+      note: p.note, createdAt: p.created_at,
+    }));
+  }
+
+  let logs = [];
+  if (ctx.role !== 'nhan_vien' || ctx.isAdmin) {
+    const { data: logRows } = await supabase
+      .from('crm_kanban_logs').select('*').eq('card_id', cardId)
+      .order('at', { ascending: false }).limit(20);
+    logs = (logRows || []).map((l) => ({
+      id: l.id, action: l.action, fromStage: l.from_stage, toStage: l.to_stage,
+      actorId: l.actor_id, meta: l.meta, at: l.at,
+    }));
+  }
+
+  return { card: masked, payments, logs };
+}
+
+// ============================================================================
+// PAYMENTS — sổ thanh toán có xác nhận (§1A)
+// ============================================================================
+
+/**
+ * Tính lại số dư từ financials + payments confirmed; nếu = 0 → auto COM_DONE + sync đơn.
+ * NGUỒN SỰ THẬT (DK chốt): crm_kanban_payments confirmed → sync về crm_orders.
+ */
+async function recomputeBalanceAndMaybeClose(cardId, actorId) {
+  const card = await loadCard(cardId);
+  if (card.track !== 'commercial') return { balance: null };
+
+  const fin = await loadFinancials(cardId);
+  const total = Number(fin?.total_amount || 0);
+
+  const { data: pays } = await supabase
+    .from('crm_kanban_payments').select('amount, status').eq('card_id', cardId);
+  const paidConfirmed = (pays || [])
+    .filter((p) => p.status === 'confirmed')
+    .reduce((s, p) => s + Number(p.amount || 0), 0);
+
+  const balance = total - paidConfirmed;
+  const paymentStatus = balance <= 0 && total > 0 ? 'paid' : (paidConfirmed > 0 ? 'partial' : 'unpaid');
+
+  // Cập nhật financials động (paid_amount/debt_amount/payment_status)
+  await supabase.from('crm_kanban_financials').update({
+    paid_amount: paidConfirmed,
+    debt_amount: balance > 0 ? balance : 0,
+    payment_status: paymentStatus,
+  }).eq('card_id', cardId);
+
+  // Sync về đơn hàng (nguồn sự thật) nếu thẻ gắn order
+  if (card.order_id) {
+    const { data: order } = await supabase
+      .from('crm_orders').select('total_amount').eq('id', card.order_id).maybeSingle();
+    const orderTotal = Number(order?.total_amount || total);
+    await supabase.from('crm_orders').update({
+      paid_amount: paidConfirmed,
+      remaining_amount: Math.max(orderTotal - paidConfirmed, 0),
+      payment_status: paymentStatus,
+      updated_at: new Date().toISOString(),
+    }).eq('id', card.order_id);
+  }
+
+  // Auto-complete: số dư = 0 và thẻ đang ở COM_DEBT → tự sang COM_DONE (không ai kéo)
+  if (balance <= 0 && total > 0 && card.status === 'active' && card.current_stage === 'COM_DEBT') {
+    await supabase.from('crm_kanban_cards')
+      .update({ current_stage: 'COM_DONE', status: 'done' }).eq('id', cardId);
+    await logKanban(cardId, actorId, 'auto_complete', 'COM_DEBT', 'COM_DONE',
+      { reason: 'balance_zero', total, paidConfirmed });
+    // Báo phòng tạo đơn + người tạo
+    if (card.created_by) {
+      await insertNotification({
+        userId: card.created_by, type: 'card_returned',
+        title: 'Thẻ đã hoàn tất (thu đủ công nợ)',
+        body: card.title + ' — đã thu đủ, tự động đóng.', cardId, priority: 'normal',
+      });
+    }
+  }
+
+  return { balance, paidConfirmed, total, paymentStatus };
+}
+
+async function kanbanPaymentAdd(currentUser, payload) {
+  const ctx = await getKanbanCtx(currentUser);
+  requireWritable(ctx);
+
+  const cardId = payload?.cardId;
+  const amount = Number(payload?.amount);
+  if (!cardId || !(amount > 0)) {
+    const e = new Error('BAD_REQUEST: Thiếu cardId hoặc amount > 0'); e.code = 'BAD_REQUEST'; throw e;
+  }
+  const card = await loadCard(cardId);
+  if (card.track !== 'commercial') {
+    const e = new Error('BAD_REQUEST: Chỉ thẻ thương mại mới ghi thanh toán'); e.code = 'BAD_REQUEST'; throw e;
+  }
+  // Ai được ghi: KTHC, admin, hoặc phòng tạo đơn (KD máy / KT vật tư). Vai khác → 403.
+  const isOriginDept = ctx.deptCode && card.owner_dept === ctx.deptCode;
+  const isKTHC = ctx.deptCode === 'KTHC';
+  if (!ctx.isAdmin && !isKTHC && !isOriginDept) {
+    const e = new Error('FORBIDDEN: Bạn không có quyền ghi thanh toán cho thẻ này'); e.code = 'FORBIDDEN'; throw e;
+  }
+
+  // KTHC/admin ghi → confirmed luôn; phòng tạo đơn (KD) ghi → pending.
+  const confirmed = ctx.isAdmin || isKTHC;
+  const row = {
+    card_id: cardId, amount, recorded_by: ctx.userId, recorded_dept: ctx.deptCode || 'NA',
+    status: confirmed ? 'confirmed' : 'pending',
+    confirmed_by: confirmed ? ctx.userId : null,
+    confirmed_at: confirmed ? new Date().toISOString() : null,
+    note: payload.note || null,
+  };
+  const { data: inserted, error } = await supabase
+    .from('crm_kanban_payments').insert(row).select().single();
+  if (error) throw error;
+
+  await logKanban(cardId, ctx.userId, confirmed ? 'payment_confirmed' : 'payment_pending',
+    card.current_stage, card.current_stage, { amount, paymentId: inserted.id });
+
+  let balanceInfo = { balance: null };
+  if (confirmed) {
+    balanceInfo = await recomputeBalanceAndMaybeClose(cardId, ctx.userId);
+  } else {
+    // Báo KTHC có khoản chờ xác nhận
+    await notifyUsersOfDept('KTHC', {
+      type: 'card_handoff', title: 'Có khoản thanh toán chờ xác nhận',
+      body: `${card.title} — ${amount.toLocaleString('vi-VN')} (ghi bởi ${ctx.deptCode})`,
+      cardId, priority: 'normal',
+    });
+  }
+
+  return { payment: snakeToCamel(inserted), balance: balanceInfo.balance, pending: !confirmed };
+}
+
+async function kanbanPaymentConfirm(currentUser, payload) {
+  const ctx = await getKanbanCtx(currentUser);
+  requireWritable(ctx);
+  if (!ctx.isAdmin && ctx.deptCode !== 'KTHC') {
+    const e = new Error('FORBIDDEN: Chỉ KTHC/admin xác nhận thanh toán'); e.code = 'FORBIDDEN'; throw e;
+  }
+  const paymentId = payload?.paymentId;
+  if (!paymentId) { const e = new Error('BAD_REQUEST: Thiếu paymentId'); e.code = 'BAD_REQUEST'; throw e; }
+
+  const { data: pay, error: pErr } = await supabase
+    .from('crm_kanban_payments').select('*').eq('id', paymentId).single();
+  if (pErr || !pay) { const e = new Error('NOT_FOUND: Không tìm thấy khoản thanh toán'); e.code = 'NOT_FOUND'; throw e; }
+  if (pay.status === 'confirmed') return { ok: true, alreadyConfirmed: true };
+
+  const { error } = await supabase.from('crm_kanban_payments').update({
+    status: 'confirmed', confirmed_by: ctx.userId, confirmed_at: new Date().toISOString(),
+  }).eq('id', paymentId);
+  if (error) throw error;
+
+  await logKanban(pay.card_id, ctx.userId, 'payment_confirmed', null, null,
+    { amount: pay.amount, paymentId });
+  const balanceInfo = await recomputeBalanceAndMaybeClose(pay.card_id, ctx.userId);
+  return { ok: true, balance: balanceInfo.balance };
+}
+
+async function kanbanPaymentList(currentUser, params) {
+  const ctx = await getKanbanCtx(currentUser);
+  const cardId = params?.cardId;
+  if (!cardId) { const e = new Error('BAD_REQUEST: Thiếu cardId'); e.code = 'BAD_REQUEST'; throw e; }
   const card = await loadCard(cardId);
   const { stages, transitions } = await loadConfig();
   const visibleCols = visibleColumnsFor(ctx, stages, transitions);
   const stageVisMap = new Map(visibleCols.map((c) => [c.stage.id, { readOnly: c.readOnly }]));
   if (!canSeeCard(ctx, card, stageVisMap)) {
-    const e = new Error('FORBIDDEN: Bạn không có quyền xem thẻ này');
-    e.code = 'FORBIDDEN'; throw e;
+    const e = new Error('FORBIDDEN: Không có quyền xem thẻ'); e.code = 'FORBIDDEN'; throw e;
   }
+  const { data: pays } = await supabase
+    .from('crm_kanban_payments').select('*').eq('card_id', cardId)
+    .order('created_at', { ascending: false });
+  return { payments: snakeToCamel(pays || []) };
+}
+
+// ============================================================================
+// kanban.move — cổng kéo-nhả v3
+// ============================================================================
+
+async function kanbanMove(currentUser, payload) {
+  const ctx = await getKanbanCtx(currentUser);
+  requireWritable(ctx);
+
+  const cardId = payload?.cardId || payload?.id;
+  const toStage = payload?.toStage;
+  if (!cardId || !toStage) { const e = new Error('BAD_REQUEST: Thiếu cardId hoặc toStage'); e.code = 'BAD_REQUEST'; throw e; }
+
+  // Cấm kéo tay vào COM_DONE — chỉ auto (số dư=0) hoặc forceClose.
+  if (toStage === 'COM_DONE') {
+    const e = new Error('VALIDATION: Thẻ thương mại tự hoàn tất khi thu đủ công nợ — không kéo tay. Dùng "Đóng tay/Xóa nợ" nếu cần.');
+    e.code = 'VALIDATION'; e.statusCode = 422; throw e;
+  }
+
+  const card = await loadCard(cardId);
+
+  const { data: tList, error: tErr } = await supabase
+    .from('crm_kanban_transitions').select('*')
+    .eq('card_type', card.card_type).eq('from_stage', card.current_stage)
+    .eq('to_stage', toStage).limit(1);
+  if (tErr) throw tErr;
+  const t = tList && tList[0];
+  if (!t) { const e = new Error('FORBIDDEN: Không có luồng hợp lệ'); e.code = 'FORBIDDEN'; throw e; }
+
+  const allowedRoles = Array.isArray(t.allowed_roles) ? t.allowed_roles : (t.allowed_roles || []);
+  if (!ctx.isAdmin && !allowedRoles.includes(ctx.role)) {
+    const e = new Error(`FORBIDDEN: Vai trò ${ctx.role} không được phép chuyển stage này`); e.code = 'FORBIDDEN'; throw e;
+  }
+  if (!ctx.isAdmin && ctx.role !== 'boss' && ctx.deptCode !== t.acting_dept) {
+    const e = new Error(`FORBIDDEN: Chỉ phòng ${t.acting_dept} mới được thực hiện chuyển này`); e.code = 'FORBIDDEN'; throw e;
+  }
+  if (!ctx.isAdmin && ctx.role === 'nhan_vien' && card.assigned_to !== ctx.userId) {
+    const e = new Error('FORBIDDEN: NV chỉ được kéo thẻ được giao cho mình'); e.code = 'FORBIDDEN'; throw e;
+  }
+
+  const requireFields = Array.isArray(t.require_fields) ? t.require_fields : (t.require_fields || []);
+  if (requireFields.length > 0) {
+    const fin = await loadFinancials(cardId);
+    for (const f of requireFields) {
+      const v = fin ? fin[f] : null;
+      if (v == null || v === '') {
+        const e = new Error(`VALIDATION: Thiếu điều kiện: ${f}`); e.code = 'VALIDATION'; e.statusCode = 422; throw e;
+      }
+    }
+  }
+
+  const stageMap = await loadStageMap();
+  const newStageRow = stageMap.get(toStage);
+  const newStatus = newStageRow?.is_terminal ? 'done' : card.status;
+
+  const { data: updated, error: upErr } = await supabase
+    .from('crm_kanban_cards').update({ current_stage: toStage, status: newStatus })
+    .eq('id', cardId).select().single();
+  if (upErr) throw upErr;
+
+  await logKanban(cardId, ctx.userId, 'move', card.current_stage, toStage,
+    { direction: t.direction, cardType: card.card_type });
+
+  // Notifications: handoff (vượt phòng) / returned (lùi)
+  const oldStage = stageMap.get(card.current_stage);
+  const newStage = stageMap.get(toStage);
+  if (t.direction === 'forward' && newStage?.owner_dept && newStage.owner_dept !== oldStage?.owner_dept
+      && newStage.owner_dept !== 'ORIGIN') {
+    await notifyUsersOfDept(newStage.owner_dept, {
+      type: 'card_handoff', title: `Có thẻ mới bàn giao cho phòng ${newStage.owner_dept}`,
+      body: card.title + (card.customer_name ? ' — ' + card.customer_name : '') + ` (${newStage.name})`,
+      cardId, priority: 'normal',
+    });
+  } else if (t.direction === 'backward' && card.assigned_to && card.assigned_to !== ctx.userId) {
+    await insertNotification({
+      userId: card.assigned_to, type: 'card_returned', title: 'Thẻ của bạn bị kéo lùi',
+      body: card.title + (oldStage ? ` (về ${newStage?.name || toStage})` : ''),
+      cardId, priority: 'high',
+    });
+  }
+
+  const [finFresh, items] = await Promise.all([loadFinancials(cardId), loadCardItems(cardId)]);
+  return { card: maskCardForView(ctx, updated, finFresh, items) };
+}
+
+// ============================================================================
+// kanban.card.forceClose — đóng tay / xóa nợ (admin + KTHC-TP)
+// ============================================================================
+
+async function kanbanCardForceClose(currentUser, payload) {
+  const ctx = await getKanbanCtx(currentUser);
+  requireWritable(ctx);
+
+  const cardId = payload?.cardId;
+  const reason = (payload?.reason || '').trim();
+  if (!cardId) { const e = new Error('BAD_REQUEST: Thiếu cardId'); e.code = 'BAD_REQUEST'; throw e; }
+  if (!reason) { const e = new Error('BAD_REQUEST: Bắt buộc ghi lý do đóng tay/xóa nợ'); e.code = 'BAD_REQUEST'; throw e; }
+
+  // Chỉ admin + KTHC-TP
+  const isKthcTP = ctx.deptCode === 'KTHC' && ctx.role === 'truong_phong';
+  if (!ctx.isAdmin && !isKthcTP) {
+    const e = new Error('FORBIDDEN: Chỉ admin hoặc Trưởng phòng KTHC được đóng tay/xóa nợ'); e.code = 'FORBIDDEN'; throw e;
+  }
+
+  const card = await loadCard(cardId);
+  if (card.track !== 'commercial') {
+    const e = new Error('BAD_REQUEST: Chỉ áp dụng cho thẻ thương mại'); e.code = 'BAD_REQUEST'; throw e;
+  }
+
+  const { data: updated, error } = await supabase
+    .from('crm_kanban_cards').update({ current_stage: 'COM_DONE', status: 'done' })
+    .eq('id', cardId).select().single();
+  if (error) throw error;
+
+  // Đánh dấu write-off trên financials (giữ debt thực để kế toán biết, payment_status='paid' để khỏi nhắc nợ)
+  await supabase.from('crm_kanban_financials')
+    .update({ payment_status: 'paid' }).eq('card_id', cardId);
+
+  await logKanban(cardId, ctx.userId, 'force_close', card.current_stage, 'COM_DONE',
+    { reason, by: ctx.appRole, dept: ctx.deptCode });
+
   const [fin, items] = await Promise.all([loadFinancials(cardId), loadCardItems(cardId)]);
-  const masked = maskCardForView(ctx, card, fin, items);
+  return { card: maskCardForView(ctx, updated, fin, items) };
+}
 
-  // Kèm logs (20 dòng gần nhất) — chỉ cho TP/Boss/admin
-  let logs = [];
-  if (ctx.role !== 'nhan_vien' || ctx.isAdmin) {
-    const { data: logRows } = await supabase
-      .from('crm_kanban_logs')
-      .select('*')
-      .eq('card_id', cardId)
-      .order('at', { ascending: false })
-      .limit(20);
-    logs = (logRows || []).map((l) => ({
-      id: l.id, action: l.action,
-      fromStage: l.from_stage, toStage: l.to_stage,
-      actorId: l.actor_id, meta: l.meta, at: l.at,
-    }));
+// ============================================================================
+// kanban.card.update — sửa field theo editableGroupsFor
+// ============================================================================
+
+function normalizeFinancialsPayload(camelObj) {
+  if (!camelObj) return null;
+  const out = {};
+  const map = {
+    currency: 'currency', unitPrice: 'unit_price', quantity: 'quantity',
+    subtotal: 'subtotal', totalAmount: 'total_amount', costPrice: 'cost_price', margin: 'margin',
+    invoiceNo: 'invoice_no', invoiceDate: 'invoice_date',
+    debtAmount: 'debt_amount', dueDate: 'due_date', paidAmount: 'paid_amount', paymentStatus: 'payment_status',
+  };
+  for (const [c, s] of Object.entries(map)) {
+    if (Object.prototype.hasOwnProperty.call(camelObj, c)) out[s] = camelObj[c];
   }
-
-  return { card: masked, logs };
+  return out;
 }
 
-// ============================================================================
-// kanban.card.create + kanban.card.update (chung helper saveCard)
-// ============================================================================
-
-async function fetchProductSnapshot(productId) {
-  if (!productId) return null;
-  const { data } = await supabase
-    .from('crm_products')
-    .select('id, code, name, unit, list_price, price, cost_price, category, is_for_rent')
-    .eq('id', productId)
-    .single();
-  return data || null;
-}
-
-/**
- * Sửa financials với ma trận editableGroupsSet → chỉ ghi field thuộc group được phép.
- * Returns { row, allowedFields[] }.
- */
 function pickEditableFinancialsPatch(ctx, card, finPatchSnake) {
   const groupModes = fieldGroupsFor(ctx, card);
   const editable = editableGroupsSet(ctx, groupModes);
@@ -392,636 +609,328 @@ function pickEditableFinancialsPatch(ctx, card, finPatchSnake) {
   for (const [group, fields] of Object.entries(FIN_FIELDS_BY_GROUP)) {
     if (!editable.has(group)) continue;
     for (const f of fields) {
-      if (Object.prototype.hasOwnProperty.call(finPatchSnake, f)) {
-        row[f] = finPatchSnake[f];
-        allowed.push(f);
-      }
+      if (Object.prototype.hasOwnProperty.call(finPatchSnake, f)) { row[f] = finPatchSnake[f]; allowed.push(f); }
     }
   }
-  // currency luôn cho sửa nếu có
-  if (Object.prototype.hasOwnProperty.call(finPatchSnake, 'currency')) {
-    row.currency = finPatchSnake.currency;
-  }
+  if (Object.prototype.hasOwnProperty.call(finPatchSnake, 'currency')) row.currency = finPatchSnake.currency;
   return { row, allowed };
-}
-
-/**
- * Tính tổng từ items → trả về { subtotal, totalAmount, costPriceTotal } để cập nhật financials.
- */
-function rollupItems(items) {
-  let subtotal = 0;
-  let costTotal = 0;
-  for (const it of items) {
-    const qty = Number(it.quantity || 0);
-    const up = Number(it.unit_price || 0);
-    const cp = Number(it.cost_price || 0);
-    const line = qty * up;
-    subtotal += line;
-    costTotal += qty * cp;
-  }
-  return { subtotal, totalAmount: subtotal, costPriceTotal: costTotal };
-}
-
-/**
- * Camel→snake cho payload financials (chỉ giữ field hợp lệ).
- */
-function normalizeFinancialsPayload(camelObj) {
-  if (!camelObj) return null;
-  const out = {};
-  const map = {
-    currency: 'currency',
-    unitPrice: 'unit_price',
-    quantity: 'quantity',
-    subtotal: 'subtotal',
-    totalAmount: 'total_amount',
-    costPrice: 'cost_price',
-    margin: 'margin',
-    invoiceNo: 'invoice_no',
-    invoiceDate: 'invoice_date',
-    debtAmount: 'debt_amount',
-    dueDate: 'due_date',
-    paidAmount: 'paid_amount',
-    paymentStatus: 'payment_status',
-  };
-  for (const [c, s] of Object.entries(map)) {
-    if (Object.prototype.hasOwnProperty.call(camelObj, c)) out[s] = camelObj[c];
-  }
-  return out;
-}
-
-/**
- * Items: chấp nhận mảng items camelCase từ FE, đồng bộ với DB.
- * - Server tự copy cost_price từ crm_products nếu FE không gửi và costPrice rỗng.
- * - server tự tính line_subtotal = qty * unit_price.
- *
- * Bảo mật:
- *   - cost_price chỉ ghi nếu ctx có group 'cost' editable. Nếu không → ép = null cho item mới
- *     để KHÔNG bị lộ vô tình (nhưng nếu là cập nhật, KHÔNG đè giá cũ đã có).
- *   - unit_price chỉ ghi nếu group 'selling' editable.
- */
-async function normalizeItemsForWrite(ctx, card, itemsCamel) {
-  if (!Array.isArray(itemsCamel)) return null;
-  const groupModes = fieldGroupsFor(ctx, card);
-  const editable = editableGroupsSet(ctx, groupModes);
-  const canWriteSelling = editable.has('selling');
-  const canWriteCost = editable.has('cost');
-
-  const out = [];
-  let pos = 0;
-  for (const raw of itemsCamel) {
-    const productId = raw.productId || raw.product_id || null;
-    let unitPrice = raw.unitPrice ?? raw.unit_price ?? null;
-    let costPrice = raw.costPrice ?? raw.cost_price ?? null;
-    let productName = raw.productName || raw.product_name || null;
-    let productCode = raw.productCode || raw.product_code || null;
-    let unit = raw.unit || null;
-
-    // Snapshot từ crm_products nếu có productId và FE chưa gửi hết
-    if (productId) {
-      const prod = await fetchProductSnapshot(productId);
-      if (prod) {
-        if (!productName) productName = prod.name;
-        if (!productCode) productCode = prod.code;
-        if (!unit) unit = prod.unit;
-        if (unitPrice == null) unitPrice = prod.list_price || prod.price || null;
-        if (costPrice == null) costPrice = prod.cost_price || null;
-      }
-    }
-
-    if (!canWriteSelling) unitPrice = null;
-    if (!canWriteCost) costPrice = null;
-
-    const quantity = Number(raw.quantity ?? 1) || 1;
-    const lineSubtotal = unitPrice != null ? Number(quantity) * Number(unitPrice) : null;
-
-    out.push({
-      id: raw.id || null,
-      product_id: productId,
-      product_name: productName,
-      product_code: productCode,
-      unit,
-      quantity,
-      unit_price: unitPrice,
-      cost_price: costPrice,
-      line_subtotal: lineSubtotal,
-      position: raw.position != null ? raw.position : pos,
-      notes: raw.notes || null,
-    });
-    pos++;
-  }
-  return out;
-}
-
-async function emitAssignedNotification(card, prevAssignedTo, actorUserId) {
-  if (!card.assigned_to) return;
-  if (card.assigned_to === prevAssignedTo) return;
-  if (card.assigned_to === actorUserId) return; // tự giao cho mình thì khỏi báo
-  await insertNotification({
-    userId: card.assigned_to,
-    type: 'card_assigned',
-    title: 'Thẻ mới được giao cho bạn',
-    body: card.title + (card.customer_name ? ' — ' + card.customer_name : ''),
-    cardId: card.id,
-    priority: 'normal',
-  });
-}
-
-async function kanbanCardCreate(currentUser, payload) {
-  const ctx = await getKanbanCtx(currentUser);
-  requireWritable(ctx);
-
-  const cardType = payload?.cardType || payload?.card_type;
-  if (!cardType || !INITIAL_STAGE_BY_CARD_TYPE[cardType]) {
-    const e = new Error('BAD_REQUEST: cardType không hợp lệ');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
-  // thue_may_ky không cho phép tạo qua đây — phải qua rentalPeriodCreate
-  if (cardType === 'thue_may_ky') {
-    const e = new Error('FORBIDDEN: Thẻ kỳ thuê chỉ được tạo qua rentalPeriod.create');
-    e.code = 'FORBIDDEN'; throw e;
-  }
-  const initialStage = INITIAL_STAGE_BY_CARD_TYPE[cardType];
-  const initialDept = INITIAL_DEPT_BY_CARD_TYPE[cardType];
-
-  // Admin được tạo cho mọi phòng; còn lại phải khớp phòng khởi tạo
-  if (!ctx.isAdmin && ctx.deptCode !== initialDept) {
-    const e = new Error(`FORBIDDEN: Chỉ user phòng ${initialDept} mới được tạo thẻ ${cardType}`);
-    e.code = 'FORBIDDEN'; throw e;
-  }
-
-  const title = (payload.title || '').trim();
-  if (!title) {
-    const e = new Error('BAD_REQUEST: Thiếu tiêu đề thẻ');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
-
-  // NV tạo thẻ không chỉ định người phụ trách → tự gán cho chính mình,
-  // nếu không thẻ unassigned sẽ không kéo được bởi chính người tạo (§5.3).
-  let assignedTo = payload.assignedTo || null;
-  if (!assignedTo && ctx.role === 'nhan_vien') assignedTo = ctx.userId;
-
-  // Insert card trước (cần id để insert financials + items)
-  const insertCard = {
-    card_type: cardType,
-    title,
-    current_stage: initialStage,
-    owner_dept: initialDept,
-    assigned_to: assignedTo,
-    customer_id: payload.customerId || null,
-    customer_name: payload.customerName || null,
-    status: 'active',
-    created_by: ctx.userId,
-  };
-  const { data: created, error: cardErr } = await supabase
-    .from('crm_kanban_cards')
-    .insert(insertCard)
-    .select()
-    .single();
-  if (cardErr) throw cardErr;
-
-  // Items
-  let items = [];
-  if (Array.isArray(payload.items) && payload.items.length > 0) {
-    const normalized = await normalizeItemsForWrite(ctx, created, payload.items);
-    if (normalized && normalized.length > 0) {
-      const rows = normalized.map((it) => ({ ...it, id: undefined, card_id: created.id }));
-      const { data: insertedItems, error: itErr } = await supabase
-        .from('crm_kanban_card_items')
-        .insert(rows)
-        .select();
-      if (itErr) throw itErr;
-      items = insertedItems || [];
-    }
-  }
-
-  // Rollup → financials
-  const finPatchSnake = normalizeFinancialsPayload(payload.financials);
-  const { row: finPatch } = pickEditableFinancialsPatch(ctx, created, finPatchSnake);
-  const rollup = rollupItems(items);
-  const finInsert = {
-    card_id: created.id,
-    currency: finPatch.currency || 'VND',
-    ...finPatch,
-  };
-  if (items.length > 0) {
-    if (finInsert.subtotal == null) finInsert.subtotal = rollup.subtotal;
-    if (finInsert.total_amount == null) finInsert.total_amount = rollup.totalAmount;
-    // cost_price tổng: chỉ ghi nếu admin/KTHC/KT-TP (group 'cost' editable)
-    const groupModes = fieldGroupsFor(ctx, created);
-    if (editableGroupsSet(ctx, groupModes).has('cost') && finInsert.cost_price == null) {
-      finInsert.cost_price = rollup.costPriceTotal;
-    }
-  }
-  const { error: finErr } = await supabase
-    .from('crm_kanban_financials')
-    .insert(finInsert);
-  if (finErr) throw finErr;
-
-  // Notify assigned + log
-  await emitAssignedNotification(created, null, ctx.userId);
-  await logKanban(created.id, ctx.userId, 'create', null, created.current_stage, {
-    cardType, itemCount: items.length,
-  });
-
-  const [finFresh, itemsFresh] = await Promise.all([loadFinancials(created.id), loadCardItems(created.id)]);
-  return { card: maskCardForView(ctx, created, finFresh, itemsFresh) };
 }
 
 async function kanbanCardUpdate(currentUser, payload) {
   const ctx = await getKanbanCtx(currentUser);
   requireWritable(ctx);
 
-  const cardId = payload?.id;
-  if (!cardId) {
-    const e = new Error('BAD_REQUEST: Thiếu id thẻ');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
+  const cardId = payload?.id || payload?.cardId;
+  if (!cardId) { const e = new Error('BAD_REQUEST: Thiếu id thẻ'); e.code = 'BAD_REQUEST'; throw e; }
   const card = await loadCard(cardId);
 
-  // Permission xem (nếu không xem được thì không sửa được)
   const { stages, transitions } = await loadConfig();
   const visibleCols = visibleColumnsFor(ctx, stages, transitions);
   const stageVisMap = new Map(visibleCols.map((c) => [c.stage.id, { readOnly: c.readOnly }]));
   if (!canSeeCard(ctx, card, stageVisMap)) {
-    const e = new Error('FORBIDDEN: Bạn không có quyền truy cập thẻ này');
-    e.code = 'FORBIDDEN'; throw e;
+    const e = new Error('FORBIDDEN: Bạn không có quyền truy cập thẻ này'); e.code = 'FORBIDDEN'; throw e;
   }
-  // NV chỉ được sửa thẻ của chính mình
-  if (ctx.role === 'nhan_vien' && card.assigned_to !== ctx.userId) {
-    const e = new Error('FORBIDDEN: NV chỉ được sửa thẻ được giao cho mình');
-    e.code = 'FORBIDDEN'; throw e;
-  }
-  // Stage read-only → không cho sửa
-  if (stageVisMap.get(card.current_stage)?.readOnly && !ctx.isAdmin) {
-    const e = new Error('FORBIDDEN: Thẻ đang ở cột không thuộc phòng bạn (read-only)');
-    e.code = 'FORBIDDEN'; throw e;
+  if (ctx.role === 'nhan_vien' && card.assigned_to !== ctx.userId && !ctx.isAdmin) {
+    const e = new Error('FORBIDDEN: NV chỉ được sửa thẻ được giao cho mình'); e.code = 'FORBIDDEN'; throw e;
   }
 
-  // Update card metadata (title/assigned_to/customer)
+  // Metadata cho phép sửa: title, assigned_to (TP/admin), customer fields
   const cardPatch = {};
   if (Object.prototype.hasOwnProperty.call(payload, 'title')) cardPatch.title = (payload.title || '').trim();
-  if (Object.prototype.hasOwnProperty.call(payload, 'assignedTo')) cardPatch.assigned_to = payload.assignedTo || null;
-  if (Object.prototype.hasOwnProperty.call(payload, 'customerId')) cardPatch.customer_id = payload.customerId || null;
-  if (Object.prototype.hasOwnProperty.call(payload, 'customerName')) cardPatch.customer_name = payload.customerName || null;
+  if (Object.prototype.hasOwnProperty.call(payload, 'assignedTo') && (ctx.role !== 'nhan_vien' || ctx.isAdmin)) {
+    cardPatch.assigned_to = payload.assignedTo || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(payload, 'customerAddress')) cardPatch.customer_address = payload.customerAddress || null;
 
   let updatedCard = card;
   const prevAssignedTo = card.assigned_to;
   if (Object.keys(cardPatch).length > 0) {
     const { data, error } = await supabase
-      .from('crm_kanban_cards')
-      .update(cardPatch)
-      .eq('id', cardId)
-      .select()
-      .single();
+      .from('crm_kanban_cards').update(cardPatch).eq('id', cardId).select().single();
     if (error) throw error;
     updatedCard = data;
   }
 
-  // Update items: replace strategy nếu payload.items được gửi
-  if (Array.isArray(payload.items)) {
-    const normalized = await normalizeItemsForWrite(ctx, updatedCard, payload.items);
-    // Xoá items cũ → insert mới (đơn giản, tránh phức tạp diff)
-    const { error: delErr } = await supabase
-      .from('crm_kanban_card_items')
-      .delete()
-      .eq('card_id', cardId);
-    if (delErr) throw delErr;
-    if (normalized && normalized.length > 0) {
-      const rows = normalized.map((it) => ({ ...it, id: undefined, card_id: cardId }));
-      const { error: insErr } = await supabase.from('crm_kanban_card_items').insert(rows);
-      if (insErr) throw insErr;
-    }
-  }
-
-  // Update financials
+  // Financials theo quyền (KTHC: hóa đơn; phòng tạo đơn: không sửa được gì ngoài note vì cost/billing/debt read)
   const finPatchSnake = normalizeFinancialsPayload(payload.financials);
   if (finPatchSnake) {
     const { row: finPatch, allowed } = pickEditableFinancialsPatch(ctx, updatedCard, finPatchSnake);
     if (allowed.length > 0 || finPatch.currency) {
-      // Đảm bảo có row financials
       const existing = await loadFinancials(cardId);
-      if (!existing) {
-        await supabase.from('crm_kanban_financials').insert({ card_id: cardId, ...finPatch });
-      } else {
-        await supabase.from('crm_kanban_financials').update(finPatch).eq('card_id', cardId);
-      }
+      if (!existing) await supabase.from('crm_kanban_financials').insert({ card_id: cardId, ...finPatch });
+      else await supabase.from('crm_kanban_financials').update(finPatch).eq('card_id', cardId);
     }
   }
 
-  // Recompute rollup nếu items thay đổi
-  if (Array.isArray(payload.items)) {
-    const freshItems = await loadCardItems(cardId);
-    const rollup = rollupItems(freshItems);
-    const groupModes = fieldGroupsFor(ctx, updatedCard);
-    const editable = editableGroupsSet(ctx, groupModes);
-    const finExist = await loadFinancials(cardId);
-    const recompute = {};
-    if (editable.has('selling')) {
-      // chỉ tự ghi tổng nếu FE không gửi tay
-      const finSent = normalizeFinancialsPayload(payload.financials) || {};
-      if (!('subtotal' in finSent)) recompute.subtotal = rollup.subtotal;
-      if (!('total_amount' in finSent)) recompute.total_amount = rollup.totalAmount;
-    }
-    if (editable.has('cost')) {
-      const finSent = normalizeFinancialsPayload(payload.financials) || {};
-      if (!('cost_price' in finSent)) recompute.cost_price = rollup.costPriceTotal;
-    }
-    if (Object.keys(recompute).length > 0) {
-      if (!finExist) {
-        await supabase.from('crm_kanban_financials').insert({ card_id: cardId, ...recompute });
-      } else {
-        await supabase.from('crm_kanban_financials').update(recompute).eq('card_id', cardId);
-      }
-    }
+  if (cardPatch.assigned_to && cardPatch.assigned_to !== prevAssignedTo && cardPatch.assigned_to !== ctx.userId) {
+    await insertNotification({
+      userId: cardPatch.assigned_to, type: 'card_assigned', title: 'Thẻ mới được giao cho bạn',
+      body: updatedCard.title + (updatedCard.customer_name ? ' — ' + updatedCard.customer_name : ''),
+      cardId, priority: 'normal',
+    });
   }
 
-  // Notify nếu reassign
-  await emitAssignedNotification(updatedCard, prevAssignedTo, ctx.userId);
-
-  await logKanban(cardId, ctx.userId, 'update', card.current_stage, card.current_stage, {
-    patchKeys: Object.keys(cardPatch),
-    itemsTouched: Array.isArray(payload.items),
-    financialsTouched: !!finPatchSnake,
-  });
+  await logKanban(cardId, ctx.userId, 'update', card.current_stage, card.current_stage,
+    { patchKeys: Object.keys(cardPatch), financialsTouched: !!finPatchSnake });
 
   const [fin, items] = await Promise.all([loadFinancials(cardId), loadCardItems(cardId)]);
   return { card: maskCardForView(ctx, updatedCard, fin, items) };
 }
 
 // ============================================================================
-// kanban.move — CỔNG KIỂM SOÁT kéo-nhả (§6.4)
-// ============================================================================
-
-async function kanbanMove(currentUser, payload) {
-  const ctx = await getKanbanCtx(currentUser);
-  requireWritable(ctx);
-
-  const cardId = payload?.cardId || payload?.id;
-  const toStage = payload?.toStage;
-  if (!cardId || !toStage) {
-    const e = new Error('BAD_REQUEST: Thiếu cardId hoặc toStage');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
-
-  const card = await loadCard(cardId);
-
-  // 3) tìm transition
-  const { data: tList, error: tErr } = await supabase
-    .from('crm_kanban_transitions')
-    .select('*')
-    .eq('card_type', card.card_type)
-    .eq('from_stage', card.current_stage)
-    .eq('to_stage', toStage)
-    .limit(1);
-  if (tErr) throw tErr;
-  const t = tList && tList[0];
-  if (!t) {
-    const e = new Error('FORBIDDEN: Không có luồng hợp lệ');
-    e.code = 'FORBIDDEN'; throw e;
-  }
-
-  // 4) role check
-  const allowedRoles = Array.isArray(t.allowed_roles) ? t.allowed_roles : (t.allowed_roles || []);
-  if (!ctx.isAdmin && !allowedRoles.includes(ctx.role)) {
-    const e = new Error(`FORBIDDEN: Vai trò ${ctx.role} không được phép chuyển stage này`);
-    e.code = 'FORBIDDEN'; throw e;
-  }
-  // 5) dept check (boss/admin bỏ qua)
-  if (!ctx.isAdmin && ctx.role !== 'boss' && ctx.deptCode !== t.acting_dept) {
-    const e = new Error(`FORBIDDEN: Chỉ phòng ${t.acting_dept} mới được thực hiện chuyển này`);
-    e.code = 'FORBIDDEN'; throw e;
-  }
-  // 6) NV chỉ kéo thẻ của mình
-  if (!ctx.isAdmin && ctx.role === 'nhan_vien' && card.assigned_to !== ctx.userId) {
-    const e = new Error('FORBIDDEN: NV chỉ được kéo thẻ được giao cho mình');
-    e.code = 'FORBIDDEN'; throw e;
-  }
-
-  // 7) require_fields
-  const requireFields = Array.isArray(t.require_fields) ? t.require_fields : (t.require_fields || []);
-  let fin = null;
-  if (requireFields.length > 0 || toStage === 'DONE') {
-    fin = await loadFinancials(cardId);
-  }
-  for (const f of requireFields) {
-    const v = fin ? fin[f] : null;
-    if (v == null || v === '' ) {
-      const e = new Error(`VALIDATION: Thiếu điều kiện: ${f}`);
-      e.code = 'VALIDATION';
-      e.statusCode = 422;
-      throw e;
-    }
-  }
-  // 7b) đóng thẻ
-  if (toStage === 'DONE' && ['ban_may', 'ban_vat_tu', 'thue_may_ky'].includes(card.card_type)) {
-    if (!fin || fin.payment_status !== 'paid') {
-      const e = new Error('VALIDATION: Chưa thu đủ công nợ, không được đóng thẻ');
-      e.code = 'VALIDATION';
-      e.statusCode = 422;
-      throw e;
-    }
-  }
-
-  // 8) update
-  const stageMap = await loadStageMap();
-  const newStageRow = stageMap.get(toStage);
-  const newStatus = newStageRow?.is_terminal ? 'done' : card.status;
-
-  const { data: updated, error: upErr } = await supabase
-    .from('crm_kanban_cards')
-    .update({ current_stage: toStage, status: newStatus })
-    .eq('id', cardId)
-    .select()
-    .single();
-  if (upErr) throw upErr;
-
-  // 9) Log + notifications
-  await logKanban(cardId, ctx.userId, 'move', card.current_stage, toStage, {
-    direction: t.direction,
-    cardType: card.card_type,
-  });
-
-  // Notification: handoff / returned
-  const oldStage = stageMap.get(card.current_stage);
-  const newStage = stageMap.get(toStage);
-  const oldDept = oldStage?.owner_dept;
-  const newDept = newStage?.owner_dept;
-
-  if (t.direction === 'forward' && newDept && newDept !== oldDept) {
-    // bàn giao sang phòng khác
-    await notifyUsersOfDept(newDept, {
-      type: 'card_handoff',
-      title: `Có thẻ mới bàn giao cho phòng ${newDept}`,
-      body: card.title + (card.customer_name ? ' — ' + card.customer_name : '') + ` (${newStage.name})`,
-      cardId: cardId,
-      priority: 'normal',
-    });
-  } else if (t.direction === 'backward') {
-    // kéo lùi — báo phòng cũ + người được giao
-    if (oldDept) {
-      await notifyUsersOfDept(oldDept, {
-        type: 'card_returned',
-        title: `Thẻ bị kéo lùi về ${oldDept}`,
-        body: card.title + (card.customer_name ? ' — ' + card.customer_name : '') + ` (về ${oldStage.name})`,
-        cardId: cardId,
-        priority: 'high',
-      });
-    }
-    if (card.assigned_to && card.assigned_to !== ctx.userId) {
-      await insertNotification({
-        userId: card.assigned_to,
-        type: 'card_returned',
-        title: 'Thẻ của bạn bị kéo lùi',
-        body: card.title + (oldStage ? ` (về ${oldStage.name})` : ''),
-        cardId: cardId,
-        priority: 'high',
-      });
-    }
-  }
-
-  const [finFresh, items] = await Promise.all([loadFinancials(cardId), loadCardItems(cardId)]);
-  return { card: maskCardForView(ctx, updated, finFresh, items) };
-}
-
-// ============================================================================
-// kanban.rentalPeriod.create — sinh kỳ thuê từ hợp đồng (§6.6)
+// kanban.rentalPeriod.create — KT-NV tạo kỳ thuê từ thẻ kỹ thuật TECH_ACTIVE (§1A)
 // ============================================================================
 
 async function kanbanRentalPeriodCreate(currentUser, payload) {
   const ctx = await getKanbanCtx(currentUser);
   requireWritable(ctx);
 
-  const contractId = payload?.contractCardId;
-  if (!contractId) {
-    const e = new Error('BAD_REQUEST: Thiếu contractCardId');
-    e.code = 'BAD_REQUEST'; throw e;
+  const techCardId = payload?.techCardId || payload?.contractCardId;
+  if (!techCardId) { const e = new Error('BAD_REQUEST: Thiếu techCardId'); e.code = 'BAD_REQUEST'; throw e; }
+
+  // Quyền: KT (NV/TP) hoặc admin (§1A: billing kỳ do KT-NV phụ trách)
+  if (!ctx.isAdmin && ctx.deptCode !== 'KT') {
+    const e = new Error('FORBIDDEN: Chỉ KT hoặc admin được tạo kỳ thuê'); e.code = 'FORBIDDEN'; throw e;
   }
-  // Quyền: KTHC + Boss/admin
-  if (!ctx.isAdmin && ctx.deptCode !== 'KTHC') {
-    const e = new Error('FORBIDDEN: Chỉ KTHC hoặc admin mới được tạo kỳ thuê');
-    e.code = 'FORBIDDEN'; throw e;
+  const tech = await loadCard(techCardId);
+  if (tech.card_type !== 'thue_may' || tech.track !== 'technical') {
+    const e = new Error('BAD_REQUEST: Thẻ nguồn phải là thẻ kỹ thuật thue_may'); e.code = 'BAD_REQUEST'; throw e;
   }
-  const contract = await loadCard(contractId);
-  if (contract.card_type !== 'thue_may') {
-    const e = new Error('BAD_REQUEST: Thẻ nguồn phải là thue_may');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
-  if (contract.current_stage !== 'RENTAL_ACTIVE') {
-    const e = new Error('BAD_REQUEST: Hợp đồng phải đang ở RENTAL_ACTIVE');
-    e.code = 'BAD_REQUEST'; throw e;
+  if (tech.current_stage !== 'TECH_ACTIVE') {
+    const e = new Error('BAD_REQUEST: Máy phải đang ở "Đang cho thuê" (TECH_ACTIVE)'); e.code = 'BAD_REQUEST'; throw e;
   }
 
   const periodLabel = payload.periodLabel || null;
   const periodStart = payload.periodStart || null;
   const periodEnd = payload.periodEnd || null;
+  const periodAmount = Number(payload.amount) || null; // phí kỳ — KT nhập (như giá vật tư)
 
+  // Thẻ kỳ thuê = thẻ THƯƠNG MẠI ở COM_NEW, owner_dept=KT (KT đẩy sang KTHC).
   const insertPeriod = {
-    card_type: 'thue_may_ky',
-    title: contract.title + (periodLabel ? ' — ' + periodLabel : ''),
-    current_stage: 'KTHC_INVOICE',
-    owner_dept: 'KTHC',
-    assigned_to: null,
-    customer_id: contract.customer_id,
-    customer_name: contract.customer_name,
-    parent_card_id: contract.id,
-    period_label: periodLabel,
-    period_start: periodStart,
-    period_end: periodEnd,
-    status: 'active',
-    created_by: ctx.userId,
+    card_type: 'thue_may_ky', track: 'commercial',
+    title: tech.title + (periodLabel ? ' — ' + periodLabel : ' — kỳ thuê'),
+    current_stage: 'COM_NEW', owner_dept: 'KT',
+    assigned_to: ctx.role === 'nhan_vien' ? ctx.userId : null,
+    customer_id: tech.customer_id, customer_name: tech.customer_name,
+    customer_address: tech.customer_address,
+    parent_card_id: tech.id, order_id: tech.order_id,
+    period_label: periodLabel, period_start: periodStart, period_end: periodEnd,
+    status: 'active', created_by: ctx.userId,
   };
   const { data: created, error } = await supabase
-    .from('crm_kanban_cards')
-    .insert(insertPeriod)
-    .select()
-    .single();
+    .from('crm_kanban_cards').insert(insertPeriod).select().single();
   if (error) throw error;
 
-  // Tạo financials rỗng để chuông + kéo-nhả có nơi check
-  await supabase.from('crm_kanban_financials').insert({ card_id: created.id, currency: 'VND' });
-
-  await logKanban(created.id, ctx.userId, 'rental_period_create', null, 'KTHC_INVOICE', {
-    contractCardId: contractId,
-    periodLabel, periodStart, periodEnd,
+  // Financials kỳ: phí thuê = selling (KT thấy phí, KHÔNG thấy giá vốn máy)
+  await supabase.from('crm_kanban_financials').insert({
+    card_id: created.id, currency: 'VND',
+    total_amount: periodAmount, subtotal: periodAmount,
+    payment_status: 'unpaid',
   });
+  if (periodAmount) {
+    await supabase.from('crm_kanban_card_items').insert({
+      card_id: created.id, product_name: 'Phí thuê ' + (periodLabel || 'kỳ'),
+      quantity: 1, unit_price: periodAmount, line_subtotal: periodAmount, position: 0,
+    });
+  }
+
+  await logKanban(created.id, ctx.userId, 'rental_period_create', null, 'COM_NEW',
+    { techCardId, periodLabel, periodStart, periodEnd, amount: periodAmount });
 
   const [fin, items] = await Promise.all([loadFinancials(created.id), loadCardItems(created.id)]);
   return { card: maskCardForView(ctx, created, fin, items) };
 }
 
 // ============================================================================
-// kanban.notifications.list / read (§6.9)
+// AUTO-CREATE HOOK — sinh thẻ từ đơn hàng (§2). Gọi từ crudController.
+// ============================================================================
+
+function classifyCardType(products) {
+  // products: [{category, is_for_rent}]
+  const isMachine = products.some((p) =>
+    p.category && /máy photocopy|photocopy|máy in/i.test(String(p.category)));
+  const isRent = products.some((p) => p.is_for_rent);
+  if (isMachine && isRent) return 'thue_may';
+  if (isMachine) return 'ban_may';
+  return 'ban_vat_tu';
+}
+
+/**
+ * Gọi sau khi crm_orders được tạo. order = row vừa insert; orderItems = mảng items đã insert.
+ * creator = user tạo đơn (để lấy owner_dept).
+ */
+async function createCardsFromOrder(order, orderItems, creator) {
+  try {
+    if (!order || !order.id) return;
+
+    // Lấy product info cho từng item (category, is_for_rent, cost_price)
+    const productIds = (orderItems || []).map((it) => it.product_id).filter(Boolean);
+    const prodMap = new Map();
+    if (productIds.length > 0) {
+      const { data: prods } = await supabase
+        .from('crm_products')
+        .select('id, name, code, unit, category, is_for_rent, cost_price, list_price, price')
+        .in('id', productIds);
+      (prods || []).forEach((p) => prodMap.set(p.id, p));
+    }
+
+    const productsForClass = (orderItems || []).map((it) => prodMap.get(it.product_id) || {});
+    const cardType = classifyCardType(productsForClass);
+
+    // owner_dept = code phòng người tạo đơn
+    let originDept = 'KD';
+    if (creator?.department_id) {
+      const { data: d } = await supabase
+        .from('crm_departments').select('code').eq('id', creator.department_id).maybeSingle();
+      if (d?.code) originDept = d.code.toUpperCase();
+    }
+
+    // Khách hàng snapshot
+    let customerName = null, customerAddress = null;
+    if (order.customer_id) {
+      const { data: cust } = await supabase
+        .from('crm_customers').select('name, address').eq('id', order.customer_id).maybeSingle();
+      customerName = cust?.name || null;
+      customerAddress = cust?.address || order.delivery_address || order.shipping_address || null;
+    }
+
+    // ===== THẺ THƯƠNG MẠI =====
+    // Vật tư = thẻ thương mại đơn lẻ; máy bán = thương mại + kỹ thuật; thuê = CHỈ kỹ thuật (§1.3).
+    let commercialCard = null;
+    if (cardType !== 'thue_may') {
+      const { data: comCard, error: comErr } = await supabase.from('crm_kanban_cards').insert({
+        card_type: cardType, track: 'commercial',
+        title: order.title || ('Đơn ' + (order.code || '')),
+        current_stage: 'COM_NEW', owner_dept: originDept,
+        assigned_to: order.assigned_to || creator?.id || null,
+        customer_id: order.customer_id, customer_name: customerName, customer_address: customerAddress,
+        order_id: order.id, status: 'active', created_by: creator?.id || null,
+      }).select().single();
+      if (comErr) throw comErr;
+      commercialCard = comCard;
+
+      // Snapshot items + financials
+      let total = 0, totalCost = 0;
+      const itemRows = (orderItems || []).map((it, idx) => {
+        const p = prodMap.get(it.product_id) || {};
+        const qty = Number(it.quantity || 0);
+        const up = Number(it.unit_price || 0);
+        const cp = Number(p.cost_price || 0);
+        total += qty * up;
+        totalCost += qty * cp;
+        return {
+          card_id: comCard.id, product_id: it.product_id || null,
+          product_name: p.name || null, product_code: p.code || null, unit: it.unit || p.unit || null,
+          quantity: qty, unit_price: up, cost_price: cp, line_subtotal: qty * up, position: idx,
+        };
+      });
+      if (itemRows.length > 0) await supabase.from('crm_kanban_card_items').insert(itemRows);
+      await supabase.from('crm_kanban_financials').insert({
+        card_id: comCard.id, currency: 'VND',
+        total_amount: Number(order.total_amount) || total, subtotal: total,
+        cost_price: totalCost, margin: (Number(order.total_amount) || total) - totalCost,
+        payment_status: 'unpaid', paid_amount: 0,
+      });
+      await logKanban(comCard.id, creator?.id || null, 'create', null, 'COM_NEW',
+        { cardType, track: 'commercial', orderId: order.id });
+      if (comCard.assigned_to && comCard.assigned_to !== creator?.id) {
+        await insertNotification({
+          userId: comCard.assigned_to, type: 'card_assigned',
+          title: 'Thẻ thương mại mới', body: comCard.title, cardId: comCard.id, priority: 'normal',
+        });
+      }
+    }
+
+    // ===== THẺ KỸ THUẬT (máy: bán hoặc thuê) =====
+    if (cardType === 'ban_may' || cardType === 'thue_may') {
+      const { data: techCard, error: techErr } = await supabase.from('crm_kanban_cards').insert({
+        card_type: cardType, track: 'technical',
+        title: (order.title || ('Đơn ' + (order.code || ''))) + ' — kỹ thuật',
+        current_stage: 'TECH_TODO', owner_dept: 'KT',
+        assigned_to: null, // chờ KT-TP phân công
+        customer_id: order.customer_id, customer_name: customerName, customer_address: customerAddress,
+        order_id: order.id, status: 'active', created_by: creator?.id || null,
+      }).select().single();
+      if (techErr) throw techErr;
+
+      // Thẻ kỹ thuật chỉ snapshot tên+SL máy, KHÔNG unit_price/cost_price.
+      const techItems = (orderItems || []).map((it, idx) => {
+        const p = prodMap.get(it.product_id) || {};
+        return {
+          card_id: techCard.id, product_id: it.product_id || null,
+          product_name: p.name || null, product_code: p.code || null, unit: it.unit || p.unit || null,
+          quantity: Number(it.quantity || 0), unit_price: null, cost_price: null,
+          line_subtotal: null, position: idx,
+        };
+      });
+      if (techItems.length > 0) await supabase.from('crm_kanban_card_items').insert(techItems);
+      await logKanban(techCard.id, creator?.id || null, 'create', null, 'TECH_TODO',
+        { cardType, track: 'technical', orderId: order.id });
+      await notifyUsersOfDept('KT', {
+        type: 'card_handoff', title: 'Có máy cần lắp/giao',
+        body: (customerName || '') + ' — ' + (techCard.title || ''), cardId: techCard.id, priority: 'normal',
+      });
+    }
+  } catch (e) {
+    // Không chặn việc tạo đơn nếu sinh thẻ lỗi — chỉ log.
+    console.error('[kanban] createCardsFromOrder error:', e.message);
+  }
+}
+
+// ============================================================================
+// NOTIFICATIONS endpoints
 // ============================================================================
 
 async function kanbanNotificationsList(currentUser, params) {
   const limit = parseInt(params?.limit || 30, 10);
   const { data: items, error } = await supabase
-    .from('crm_notifications')
-    .select('*')
-    .eq('user_id', currentUser.id)
-    .eq('is_deleted', false)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+    .from('crm_notifications').select('*')
+    .eq('user_id', currentUser.id).eq('is_deleted', false)
+    .order('created_at', { ascending: false }).limit(limit);
   if (error) throw error;
   const { count, error: cErr } = await supabase
-    .from('crm_notifications')
-    .select('*', { count: 'exact', head: true })
-    .eq('user_id', currentUser.id)
-    .eq('is_read', false)
-    .eq('is_deleted', false);
+    .from('crm_notifications').select('*', { count: 'exact', head: true })
+    .eq('user_id', currentUser.id).eq('is_read', false).eq('is_deleted', false);
   if (cErr) throw cErr;
-  return {
-    items: snakeToCamel(items || []),
-    unreadCount: count || 0,
-  };
+  return { items: snakeToCamel(items || []), unreadCount: count || 0 };
 }
 
 async function kanbanNotificationsRead(currentUser, payload) {
   const ids = payload?.ids;
   const all = !!payload?.all;
-  if (!all && (!ids || ids.length === 0)) {
-    const e = new Error('BAD_REQUEST: Thiếu ids hoặc cờ all');
-    e.code = 'BAD_REQUEST'; throw e;
-  }
-  let q = supabase
-    .from('crm_notifications')
+  if (!all && (!ids || ids.length === 0)) { const e = new Error('BAD_REQUEST: Thiếu ids hoặc cờ all'); e.code = 'BAD_REQUEST'; throw e; }
+  let q = supabase.from('crm_notifications')
     .update({ is_read: true, read_at: new Date().toISOString() })
     .eq('user_id', currentUser.id);
-  if (!all) q = q.in('id', ids);
-  else q = q.eq('is_read', false);
+  if (!all) q = q.in('id', ids); else q = q.eq('is_read', false);
   const { error } = await q;
   if (error) throw error;
   return { ok: true };
 }
 
-// ============================================================================
-// kanban.debt.scan — chạy thủ công (admin only)
-// ============================================================================
-
 async function kanbanDebtScan(currentUser) {
   const ctx = await getKanbanCtx(currentUser);
-  if (!ctx.isAdmin) {
-    const e = new Error('FORBIDDEN: Chỉ admin mới chạy được debt.scan thủ công');
-    e.code = 'FORBIDDEN'; throw e;
-  }
+  if (!ctx.isAdmin) { const e = new Error('FORBIDDEN: Chỉ admin mới chạy được debt.scan thủ công'); e.code = 'FORBIDDEN'; throw e; }
   const { data, error } = await supabase.rpc('fn_debt_reminder_scan');
   if (error) throw error;
   return { result: snakeToCamel(data || {}) };
 }
 
 // ============================================================================
-// EXPORTS
-// ============================================================================
-
 module.exports = {
   kanbanConfigGet,
   kanbanBoardGet,
   kanbanCardGet,
-  kanbanCardCreate,
   kanbanCardUpdate,
+  kanbanCardForceClose,
   kanbanMove,
   kanbanRentalPeriodCreate,
+  kanbanPaymentAdd,
+  kanbanPaymentConfirm,
+  kanbanPaymentList,
   kanbanNotificationsList,
   kanbanNotificationsRead,
   kanbanDebtScan,
+  // hook
+  createCardsFromOrder,
 };

@@ -3,6 +3,32 @@ const { snakeToCamel, camelToSnake } = require('../utils/helpers');
 const { generateSalt, hashPassword } = require('../utils/crypto');
 
 // =====================================
+// KT SALES-TAB GUARD (Kanban v3 §5.3)
+// KT không được thấy giá máy ở bất cứ đâu → KT chỉ thấy đơn/báo giá của PHÒNG KT,
+// kể cả khi được assign chéo. Chặn cứng department_id ở server.
+// =====================================
+const _deptCodeCache = new Map(); // department_id → code
+async function getDeptCode(departmentId) {
+  if (!departmentId) return null;
+  if (_deptCodeCache.has(departmentId)) return _deptCodeCache.get(departmentId);
+  const { data } = await supabase
+    .from('crm_departments').select('code').eq('id', departmentId).maybeSingle();
+  const code = data?.code ? String(data.code).toUpperCase() : null;
+  _deptCodeCache.set(departmentId, code);
+  return code;
+}
+
+// Bảng có thể chứa giá máy mà KT KHÔNG được xem ngoài phòng mình.
+const KT_RESTRICTED_TABLES = ['crm_orders', 'crm_quotes'];
+
+async function isKTRestricted(user, tableName) {
+  if (!KT_RESTRICTED_TABLES.includes(tableName)) return false;
+  if (user.role === 'admin' || user.role === 'boss') return false; // admin/boss xem hết
+  const code = await getDeptCode(user.department_id);
+  return code === 'KT';
+}
+
+// =====================================
 // PERMISSION FILTER BUILDER FOR SQL
 // =====================================
 async function applyPermissionFilter(query, user, hasDeptField = true, hasAssignedField = true, tableName = null) {
@@ -136,6 +162,11 @@ async function crudList(tableName, user, params) {
   const filterResult = await applyPermissionFilter(query, user, hasDeptField, hasAssignedField, tableName);
   query = filterResult.q;
 
+  // KT guard (§5.3): chặn cứng đơn/báo giá ngoài phòng KT — không cho assigned_to escape.
+  if (await isKTRestricted(user, tableName)) {
+    query = query.eq('department_id', user.department_id);
+  }
+
   // Áp dụng tìm kiếm
   if (search) {
     let searchFields = ['code', 'name'];
@@ -210,6 +241,15 @@ async function crudGet(tableName, user, id) {
     const err = new Error('NOT_FOUND: Không tìm thấy bản ghi');
     err.code = 'NOT_FOUND';
     throw err;
+  }
+
+  // KT guard (§5.3): KT chỉ mở được đơn/báo giá của phòng KT — chặn giá máy của KD.
+  if (await isKTRestricted(user, tableName)) {
+    if (data.department_id !== user.department_id) {
+      const err = new Error('FORBIDDEN: Bạn không có quyền truy cập bản ghi này');
+      err.code = 'FORBIDDEN';
+      throw err;
+    }
   }
 
   // Phân quyền chi tiết cho bản ghi đơn lẻ
@@ -466,7 +506,19 @@ async function crudCreate(tableName, user, payload) {
     if (itemErr) throw itemErr;
   }
 
-  // Kanban v2: KHÔNG auto-sinh thẻ kanban từ Order/Ticket. Thẻ Kanban là entity độc lập.
+  // Kanban v3 (§2): chỉ ĐƠN HÀNG mới sinh thẻ (thương mại + kỹ thuật). Báo giá KHÔNG sinh thẻ.
+  if (tableName === 'crm_orders') {
+    try {
+      const { createCardsFromOrder } = require('./kanbanController');
+      // Lấy lại items đã insert (có product_id chuẩn hoá) để snapshot
+      const { data: insertedItems } = await supabase
+        .from('crm_order_items').select('*')
+        .eq('parent_type', 'order').eq('parent_id', data.id).eq('is_deleted', false);
+      await createCardsFromOrder(data, insertedItems || [], user);
+    } catch (hookErr) {
+      console.error('[kanban] auto-create hook error:', hookErr.message);
+    }
+  }
 
   return snakeToCamel(data);
 }

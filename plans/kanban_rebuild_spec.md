@@ -1,473 +1,238 @@
-# ĐẶC TẢ XÂY LẠI KANBAN LIÊN PHÒNG (CRM) — PHƯƠNG ÁN C
+# ĐẶC TẢ KANBAN LIÊN PHÒNG — v3 (MÔ HÌNH HAI LUỒNG, SINH TỪ ĐƠN HÀNG)
 
-> **Cho Claude Code.** Đây là spec để **xây mới hoàn toàn** module Kanban. Code cũ có vấn đề về phân quyền và lộ dữ liệu, **phải bỏ và thay thế**. Đọc hết file này trước khi bắt đầu. Không tự suy diễn ngoài spec; chỗ nào thiếu thông tin thì hỏi lại chứ không đoán.
+> **Cho Claude Code.** Đây là bản v3, **đại tu** Kanban v2 vừa dựng. Nền móng bảo mật của v2 giữ lại; phần luồng/cột/sinh-thẻ thay đổi lớn theo nghiệp vụ Siêu Thanh. Đọc hết trước khi sửa. Thiếu thông tin thì hỏi DK.
 
----
+## 0. NGUYÊN TẮC BẤT BIẾN
+1. **Kanban chỉ phục vụ theo dõi HÀNG HÓA + TIỀN.** Tác vụ không liên quan dòng tiền/hàng → không đưa vào Kanban.
+2. **Bảo mật ở server.** Mọi quyết định "thấy field gì, kéo thẻ nào" do backend (Express action `kanban.*` trên Vercel, service_role) quyết; client chỉ vẽ thứ server trả. Gọi same-origin `/api` (không áp rule Apps Script).
+3. **Thẻ sinh TỪ ĐƠN HÀNG, không tạo tay.** Bỏ nút "Tạo thẻ mới". Tạo đơn → tự sinh thẻ.
+4. **Snapshot để kiểm toán.** Giá/giá vốn/SP/khách trên thẻ là **bản chụp tại thời điểm tạo đơn**; danh mục sản phẩm đổi giá về sau **không** ảnh hưởng thẻ cũ. (Trạng thái thanh toán/công nợ thì cập nhật động.)
+5. **Kéo-nhả không tự do** — qua `kanban.move`, kiểm transition + role/phòng + điều kiện.
+6. Bảng prefix `crm_kanban_`. Job nhắc nợ chạy `pg_cron` trong Supabase.
 
-## 0. NGUYÊN TẮC BẤT BIẾN (đọc kỹ, đừng vi phạm)
+## 1. MÔ HÌNH HAI LUỒNG (cốt lõi v3)
 
-1. **Bảo mật ở server, không phải client.** Việc ẩn cột/ẩn giá ở HTML chỉ là cho gọn mắt. Mọi quyết định "ai thấy field gì, ai kéo được thẻ nào" phải do **Edge Function (Supabase, Deno)** quyết định. Frontend KHÔNG bao giờ nhận field nhạy cảm nếu role không có quyền — server phải lọc payload trước khi trả.
-2. **Mọi truy cập dữ liệu Kanban đi qua Edge Function**, không cho client query thẳng bảng tài chính. Edge Function dùng `service_role` để đọc/ghi; client chỉ gọi function kèm token để chứng minh danh tính.
-3. **Kéo-nhả KHÔNG tự do.** Mỗi lần di chuyển thẻ phải qua hàm `kanban-move`, hàm này kiểm tra bảng `crm_stage_transitions` (có hợp lệ không) + role/phòng (có quyền không) + required fields (đủ điều kiện chưa). Frontend chặn trước cho UX, server chặn lại lần nữa cho chắc.
-4. **Hosting & CORS:** Frontend chạy trên **Vercel** (`hast-crm.vercel.app`), KHÔNG phải GitHub Pages, KHÔNG phải Google Apps Script. **Quy tắc "GET-only, không gửi Content-Type" của Apps Script KHÔNG áp dụng ở dự án này.** Dùng `fetch` POST + JSON bình thường. Nếu lớp bảo mật là **API route cùng app Next.js trên Vercel** thì gọi same-origin (không cần CORS). Nếu là **Supabase Edge Functions** (khác origin) thì function trả CORS headers + xử lý preflight `OPTIONS` bình thường.
-5. **Lớp bảo mật đặt ở đâu — XÁC ĐỊNH Ở BƯỚC KHẢO SÁT (mục 9.1):** spec mô tả các endpoint dưới tên "Edge Function", nhưng **logic giống hệt nhau dù đặt ở đâu**. Chọn theo thực tế app:
-   - Nếu `hast-crm` là **Next.js có API routes / có backend Node** (dấu hiệu: có `supabaseClient.js`, thư mục `api/`, `pages/api` hoặc `app/api`) → **đặt các endpoint này thành API routes Node/TS trong chính app Vercel** (nhất quán với backend hiện có, không cần dựng thêm Deno).
-   - Nếu app **chỉ là frontend tĩnh** đẩy lên Vercel, không có backend riêng → **dùng Supabase Edge Functions (Deno)** như mô tả.
-   - **Dù chọn cách nào:** vẫn giữ nguyên nguyên tắc — service_role chỉ ở server, client không đọc thẳng bảng tài chính, mọi move qua một endpoint gác cổng duy nhất. Job `pg_cron` (mục 6.8) nằm trong Supabase, không đổi.
-5. Tất cả bảng dùng prefix `crm_` trong schema `public`. Giữ đúng convention hiện có của dự án.
+Một đơn hàng phát sinh **hai loại công việc song song, độc lập**, nên sinh **hai thẻ tách biệt** (trừ vật tư):
 
----
+- **Thẻ THƯƠNG MẠI** (track=`commercial`): theo dòng tiền — đơn → lên hóa đơn → thu công nợ → đóng. Phòng tạo đơn + KTHC + admin/boss thấy.
+- **Thẻ KỸ THUẬT** (track=`technical`): theo việc lắp/giao máy — chỉ KT + admin/boss thấy, **chỉ chứa tên + địa chỉ khách + tên máy/SL, KHÔNG có giá**.
 
-## 1. PHẠM VI & VIỆC CẦN LÀM
+Hai thẻ đóng **riêng** ("đóng case bán máy" do phòng tạo đơn; "đóng case kỹ thuật" do KT).
 
-**Xây mới:**
-- Schema Supabase: bảng cards, bảng tài chính tách riêng, bảng cấu hình stage + transition, seed dữ liệu cấu hình.
-- 4 Edge Functions: `kanban-board` (đọc board đã lọc), `kanban-move` (cổng kiểm soát kéo-nhả), `kanban-card` (tạo/sửa thẻ), `rental-period-create` (sinh thẻ kỳ thuê).
-- Frontend: `kanban.html` + JS render board, kéo-nhả, gọi các Edge Function.
-
-**Đập bỏ:** Xem mục 9 (làm có backup, không xóa mù).
-
----
-
-## 2. MÔ HÌNH NGHIỆP VỤ
-
-3 phòng: **KD** (Kinh doanh), **KT** (Kỹ thuật), **KTHC** (Kế toán - Hành chính).
-4 loại thẻ (`card_type`):
-
-| card_type | Mô tả | Phòng khởi tạo |
-|---|---|---|
-| `ban_may` | Bán máy | KD |
-| `thue_may` | Hợp đồng cho thuê máy (vòng đời hợp đồng) | KD |
-| `thue_may_ky` | Một kỳ thanh toán của hợp đồng thuê (mỗi kỳ = 1 thẻ mới) | sinh tự động từ `thue_may` |
-| `ban_vat_tu` | Bán vật tư | KT |
-
-### 2.1. Bộ cột chung của board (1 board, 7 cột)
-
-Vì là **một board**, định nghĩa **một bộ cột cố định**; mỗi `card_type` chỉ đi qua một tập con các cột. Cột nào không thuộc luồng của thẻ thì thẻ đó không bao giờ xuất hiện ở đó.
-
-| code | Tên hiển thị | owner_dept | terminal |
+### 1.1. Theo loại đơn
+| Loại (`card_type`) | Phòng tạo đơn | Thẻ thương mại | Thẻ kỹ thuật |
 |---|---|---|---|
-| `KD_OPEN` | KD – Cơ hội / Báo giá | KD | no |
-| `KD_WON` | KD – Đã chốt | KD | no |
-| `KT_PROCESS` | KT – Xử lý hàng / máy | KT | no |
-| `KTHC_INVOICE` | KTHC – Lên hóa đơn | KTHC | no |
-| `KTHC_DEBT` | KTHC – Theo dõi công nợ | KTHC | no |
-| `RENTAL_ACTIVE` | Đang cho thuê | KT | no |
-| `DONE` | Hoàn tất | KTHC | yes |
+| `ban_may` (bán máy) | KD | ✓ (KD↔KTHC) | ✓ (KT lắp) |
+| `thue_may` (thuê máy) | KD | ✓ qua **kỳ thuê** (xem 1.3) | ✓ (KT giao → đang thuê → thu hồi) |
+| `ban_vat_tu` (bán vật tư, gồm cả công sửa/bảo trì = bán sức lao động) | KT | ✓ (KT↔KTHC) | ✗ (không có lắp đặt) |
 
-### 2.2. Luồng hợp lệ theo từng loại thẻ
+> **Không có luồng "bảo trì" riêng** — sửa chữa/bảo trì coi như bán vật tư (bán công). Bỏ.
 
-- **ban_may:** `KD_OPEN → KD_WON → KT_PROCESS → KTHC_INVOICE → KTHC_DEBT → DONE`
-- **ban_vat_tu:** `KT_PROCESS → KTHC_INVOICE → KTHC_DEBT → DONE` (tạo thẳng ở `KT_PROCESS`)
-- **thue_may (hợp đồng):** `KD_OPEN → KD_WON → KT_PROCESS → RENTAL_ACTIVE → DONE`
-  - Tại `RENTAL_ACTIVE`: có nút **"Tạo kỳ thuê"** → sinh một thẻ `thue_may_ky` mới (xem mục 6).
-  - `RENTAL_ACTIVE → DONE` = thu hồi máy / kết thúc hợp đồng.
-- **thue_may_ky (kỳ thuê):** `KTHC_INVOICE → KTHC_DEBT → DONE` (sinh ra ở `KTHC_INVOICE`)
+### 1.2. Cột (stages)
+
+**Luồng THƯƠNG MẠI** (4 cột):
+| code | Tên | Dept phụ trách cột |
+|---|---|---|
+| `COM_NEW` | Đơn mới | phòng tạo đơn (KD hoặc KT-vật tư) |
+| `COM_INVOICE` | KTHC – Cần lên hóa đơn | KTHC |
+| `COM_DEBT` | KTHC – Đã lên hóa đơn / Thu hồi công nợ | KTHC |
+| `COM_DONE` | Hoàn tất | (terminal; phòng tạo đơn đóng) |
+
+**Luồng KỸ THUẬT** (bán máy — 3 cột):
+| code | Tên | Dept |
+|---|---|---|
+| `TECH_TODO` | Cần lắp máy | KT |
+| `TECH_INSTALLED` | Đã lắp / chạy tốt | KT |
+| `TECH_DONE` | Hoàn tất | (terminal; KT đóng) |
+
+**Luồng KỸ THUẬT (thuê máy)** dùng thêm: `TECH_ACTIVE` (Đang cho thuê), `TECH_RECOVER` (Thu hồi máy). Đường đi: `TECH_TODO → TECH_ACTIVE → TECH_RECOVER → TECH_DONE`.
+
+> Bỏ hẳn cột "Cơ hội / Báo giá" (xác suất bán ~0%, không theo dõi).
+
+### 1.3. Thuê máy & kỳ thuê
+- Đơn thuê (KD) → sinh **thẻ kỹ thuật** (giao→đang thuê→thu hồi→hoàn tất). **Không** sinh một thẻ thương mại lớn.
+- Mỗi **kỳ thanh toán** sinh một **thẻ thương mại** `thue_may_ky` (COM_INVOICE → COM_DEBT → COM_DONE) — gắn `parent_card_id` = thẻ kỹ thuật thuê. Sinh bằng nút "Tạo kỳ thuê" trên thẻ kỹ thuật khi đang `TECH_ACTIVE` (về sau có thể tự động bằng pg_cron). *(Nút này KHÁC nút "Tạo thẻ mới" đã bỏ — nó tạo kỳ billing, không tạo thẻ mồ côi.)*
+
+## 1A. CHỐT CƠ CHẾ THẤY / KÉO / THANH TOÁN (từ ma trận DK + xác nhận — ƯU TIÊN CAO NHẤT)
+
+**Ai THẤY (visibility):**
+- *Luồng thương mại:* phòng tạo đơn (KD bán máy; KT vật tư/thuê) thấy cả 4 cột. KTHC thấy từ "Lên hóa đơn" trở đi (KHÔNG thấy "Đơn mới"). KT không thấy luồng thương mại máy.
+- *Luồng kỹ thuật* (bán máy/thuê máy): **KD thấy để theo dõi nhưng KHÔNG kéo**; **KT thấy & kéo**; KTHC không thấy. Bỏ cột "Đơn mới" — thẻ kỹ thuật vào thẳng "Lắp máy".
+- NV chỉ thấy thẻ `assigned_to=mình` / chưa giao trong phòng mình.
+
+**Ai KÉO (action):**
+- `Đơn mới → Lên hóa đơn`: phòng tạo đơn kéo (KD bán máy; KT vật tư/thuê).
+- `Lên hóa đơn → Đã lên hóa đơn`: KTHC kéo (bắt buộc đã có số/ngày hóa đơn).
+- `Đã lên hóa đơn → Hoàn thành`: **TỰ ĐỘNG khi số dư công nợ = 0** (không ai kéo).
+- Kỹ thuật `Lắp máy → Hoàn thành`: KT kéo tay khi máy chạy tốt.
+- **Kéo lùi:** chỉ TP/admin, tối đa **1 bước**, **cấm về "Đơn mới"**.
+- **Đóng tay / "Xóa nợ" (nợ xấu):** chỉ **admin + KTHC-TP** được force-đóng (bỏ qua điều kiện thu đủ), ghi lý do.
+
+**THANH TOÁN — sổ thanh toán có xác nhận (CƠ CHẾ MỚI):**
+- Khách có thể trả cho **KD hoặc KTHC** → cả hai được **ghi nhận khoản thanh toán** (số tiền) vào thẻ.
+- Khoản **KD nhập = "chờ xác nhận"**, CHƯA trừ công nợ. **KTHC xác nhận** mới đối trừ. Khoản KTHC nhập = xác nhận luôn.
+- `Số dư công nợ = tổng tiền (snapshot) − tổng khoản ĐÃ xác nhận`. **Số dư = 0 → thẻ tự động sang "Hoàn thành".**
+- Bảng mới `crm_kanban_payments (id, card_id, amount, recorded_by, recorded_dept, status['pending'|'confirmed'], confirmed_by, confirmed_at, note, created_at)`. KD chỉ INSERT `pending`; KTHC confirm/insert.
+- **Nguồn sự thật tiền nên gắn với đơn/hóa đơn (kế toán)** — CC quyết cách đồng bộ `crm_kanban_payments` ↔ công nợ trên `crm_orders` và **hỏi DK** trước khi code phần này.
+
+**THUÊ MÁY:**
+- Đơn thuê do **KD** tạo → sinh **thẻ kỹ thuật** (KT): `Lắp/giao máy → Đang cho thuê → Thu hồi máy → Hoàn thành` (tương tự lắp máy, thêm bước thu hồi cuối kỳ hợp đồng).
+- **Billing theo kỳ do KT-NV phụ trách** (giống vật tư): KT-NV bấm **"Tạo kỳ thuê"** trên thẻ kỹ thuật đang cho thuê → sinh thẻ thương mại `thue_may_ky` ở "Đơn mới" (owner=KT) → KT đẩy sang KTHC → lên hóa đơn → thu nợ → tự đóng khi số dư=0. KT thấy **phí thuê** (như giá vật tư), KHÔNG thấy giá trị/giá vốn máy.
+
+> Mục 1A này **ưu tiên hơn** mọi mô tả cũ ở §4/§5 nếu mâu thuẫn. CC cập nhật §4 (transitions: drag owner + auto-complete + backward-1 + write-off) và §5 (KD được thêm khoản thanh toán `pending`) cho khớp 1A.
 
 ---
 
-## 3. SCHEMA SQL
+## 2. SINH THẺ TỪ ĐƠN HÀNG (auto-create)
 
-> File: `supabase/migrations/001_kanban_schema.sql`
+Khi `crudCreate` tạo một dòng `crm_orders`:
+1. Xác định `card_type` từ sản phẩm trên đơn: máy photocopy + thuê → `thue_may`; máy + bán → `ban_may`; còn lại → `ban_vat_tu`. (Đơn KD = máy/thuê; đơn KT = vật tư.)
+2. **Snapshot** từ đơn + danh mục SP tại thời điểm đó vào thẻ:
+   - `customer_name`, `customer_address`.
+   - các dòng `crm_kanban_card_items` từ `crm_order_items`: `product_name`, `quantity`, `unit_price` (từ đơn), `cost_price` (từ `crm_products` lúc này), `subtotal`.
+   - `crm_kanban_financials`: `total_amount`, `total_cost`, `margin` (tổng hợp). Đây là **bản chụp**, không đọc động.
+3. Tạo **thẻ thương mại** ở `COM_NEW`, `owner_dept` = phòng tạo đơn, `assigned_to` = người tạo đơn, `order_id` trỏ về đơn.
+4. Nếu là **máy (ban_may/thue_may)**: tạo thêm **thẻ kỹ thuật** ở `TECH_TODO`, `owner_dept`='KT', `order_id` trỏ về đơn, `assigned_to`=null (chờ KT-TP phân công). Thẻ kỹ thuật **chỉ** snapshot `customer_name`, `customer_address`, và tên+SL máy (KHÔNG `unit_price`/`cost_price`).
+5. Trạng thái thanh toán (`payment_status`, `paid_amount`, `debt_amount`) cập nhật động do KTHC trong quá trình thu nợ (không snapshot cứng).
+6. Ghi log + emit notification cho người phụ trách phòng nhận.
+
+> **Không** xóa/sửa module Bán hàng; chỉ móc hook tạo thẻ vào sau khi đơn được tạo.
+
+## 3. SCHEMA (sửa từ v2)
+
+Thêm/sửa migration **mới** (không viết đè migration đã áp). Bảng cấu hình stages/transitions cần **xóa seed cũ và seed lại** theo mô hình hai luồng.
 
 ```sql
--- ====== STAGES (cấu hình cột) ======
-create table public.crm_kanban_stages (
-  id            text primary key,            -- vd 'KD_OPEN'
-  name          text not null,
-  owner_dept    text not null check (owner_dept in ('KD','KT','KTHC')),
-  sort_order    int  not null,
-  is_terminal   boolean not null default false
-);
+-- stages: thêm cột track
+alter table public.crm_kanban_stages add column if not exists track text; -- 'commercial' | 'technical'
 
--- ====== TRANSITIONS (luật kéo-nhả) ======
-create table public.crm_kanban_transitions (
-  id                 bigint generated always as identity primary key,
-  card_type          text not null check (card_type in ('ban_may','thue_may','thue_may_ky','ban_vat_tu')),
-  from_stage         text not null references public.crm_kanban_stages(id),
-  to_stage           text not null references public.crm_kanban_stages(id),
-  direction          text not null check (direction in ('forward','backward')),
-  allowed_roles      jsonb not null,         -- vd '["nhan_vien","truong_phong","boss"]'
-  acting_dept        text not null,          -- phòng được phép thực hiện (= phòng chịu trách nhiệm ở from_stage)
-  require_fields     jsonb not null default '[]', -- field bắt buộc phải có trước khi chuyển
-  unique (card_type, from_stage, to_stage)
-);
+-- cards: thêm liên kết đơn + track + snapshot khách
+alter table public.crm_kanban_cards
+  add column if not exists order_id uuid references public.crm_orders(id),
+  add column if not exists track text check (track in ('commercial','technical')),
+  add column if not exists customer_address text;
+-- (customer_name đã có)
 
--- ====== CARDS (thẻ) ======
-create table public.crm_kanban_cards (
-  id              uuid primary key default gen_random_uuid(),
-  card_type       text not null check (card_type in ('ban_may','thue_may','thue_may_ky','ban_vat_tu')),
-  title           text not null,
-  current_stage   text not null references public.crm_kanban_stages(id),
-  owner_dept      text not null check (owner_dept in ('KD','KT','KTHC')),
-  assigned_to     uuid,                       -- crm_users.id (nhân viên phụ trách)
-  customer_id     uuid,                       -- nếu có bảng khách hàng thì FK; tạm để uuid
-  customer_name   text,
-  -- liên kết kỳ thuê -> hợp đồng:
-  parent_card_id  uuid references public.crm_kanban_cards(id),
-  period_label    text,                       -- vd 'Kỳ 2025-06'
-  period_start    date,
-  period_end      date,
-  status          text not null default 'active' check (status in ('active','done','cancelled')),
-  created_by      uuid,
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now()
-);
-
--- ====== FINANCIALS (TÁCH RIÊNG — đây là phần nhạy cảm) ======
-create table public.crm_kanban_financials (
-  card_id        uuid primary key references public.crm_kanban_cards(id) on delete cascade,
-  currency       text not null default 'VND',
-  unit_price     numeric(18,2),   -- group: selling
-  quantity       numeric(18,2),   -- group: selling
-  subtotal       numeric(18,2),   -- group: selling
-  total_amount   numeric(18,2),   -- group: selling
-  cost_price     numeric(18,2),   -- group: cost  (GIÁ VỐN — nhạy cảm nhất)
-  margin         numeric(18,2),   -- group: cost
-  invoice_no     text,            -- group: billing
-  invoice_date   date,            -- group: billing
-  debt_amount    numeric(18,2),   -- group: debt
-  due_date       date,            -- group: debt
-  paid_amount    numeric(18,2),   -- group: debt
-  payment_status text default 'unpaid' check (payment_status in ('unpaid','partial','paid'))
-);
-
--- ====== INDEXES ======
-create index idx_cards_stage   on public.crm_kanban_cards(current_stage) where status='active';
-create index idx_cards_dept    on public.crm_kanban_cards(owner_dept);
-create index idx_cards_assignee on public.crm_kanban_cards(assigned_to);
-create index idx_cards_parent  on public.crm_kanban_cards(parent_card_id);
-
--- ====== updated_at trigger ======
-create or replace function public.tg_touch_updated_at() returns trigger as $$
-begin new.updated_at = now(); return new; end; $$ language plpgsql;
-create trigger trg_cards_touch before update on public.crm_kanban_cards
-  for each row execute function public.tg_touch_updated_at();
+-- card_items giữ nguyên: với thẻ kỹ thuật, unit_price/cost_price để NULL.
+-- financials = snapshot tổng hợp (total_amount/total_cost/margin) + thanh toán động (payment_status/paid_amount/debt_amount/last_reminded_at).
 ```
 
-> **crm_users:** đảm bảo có `role` (`'boss'|'truong_phong'|'nhan_vien'`) và `department` (`'KD'|'KT'|'KTHC'`, boss để `null`). Nếu schema hiện tại thiếu, thêm cột (không phá cột cũ).
+> Thẻ test "abc" và mọi thẻ v2 trong `crm_kanban_cards` nên **xóa sạch** (TRUNCATE) trước khi seed lại — chưa có dữ liệu thật.
 
----
+## 4. SEED STAGES + TRANSITIONS (seed lại)
 
-## 4. SEED CẤU HÌNH
-
-> File: `supabase/migrations/002_kanban_seed.sql`
-
-```sql
-insert into public.crm_kanban_stages (id, name, owner_dept, sort_order, is_terminal) values
- ('KD_OPEN','KD – Cơ hội / Báo giá','KD',10,false),
- ('KD_WON','KD – Đã chốt','KD',20,false),
- ('KT_PROCESS','KT – Xử lý hàng / máy','KT',30,false),
- ('KTHC_INVOICE','KTHC – Lên hóa đơn','KTHC',40,false),
- ('KTHC_DEBT','KTHC – Theo dõi công nợ','KTHC',50,false),
- ('RENTAL_ACTIVE','Đang cho thuê','KT',45,false),
- ('DONE','Hoàn tất','KTHC',99,true);
-
--- Quy ước quyền:
---  forward trong cùng phòng        -> [nhan_vien, truong_phong, boss]
---  forward vượt ranh giới phòng    -> [truong_phong, boss]   (quyền bàn giao của TP)
---  đóng thẻ (-> DONE)              -> [truong_phong, boss]
---  backward (kéo lùi)              -> [truong_phong, boss]
-
--- ===== ban_may =====
-insert into public.crm_kanban_transitions (card_type,from_stage,to_stage,direction,allowed_roles,acting_dept,require_fields) values
- ('ban_may','KD_OPEN','KD_WON','forward','["nhan_vien","truong_phong","boss"]','KD','[]'),
- ('ban_may','KD_WON','KT_PROCESS','forward','["truong_phong","boss"]','KD','["total_amount"]'),
- ('ban_may','KT_PROCESS','KTHC_INVOICE','forward','["truong_phong","boss"]','KT','["total_amount"]'),
- ('ban_may','KTHC_INVOICE','KTHC_DEBT','forward','["nhan_vien","truong_phong","boss"]','KTHC','["invoice_no","invoice_date"]'),
- ('ban_may','KTHC_DEBT','DONE','forward','["truong_phong","boss"]','KTHC','["payment_status"]'),
- -- backward
- ('ban_may','KD_WON','KD_OPEN','backward','["truong_phong","boss"]','KD','[]'),
- ('ban_may','KT_PROCESS','KD_WON','backward','["truong_phong","boss"]','KT','[]'),
- ('ban_may','KTHC_INVOICE','KT_PROCESS','backward','["truong_phong","boss"]','KTHC','[]'),
- ('ban_may','KTHC_DEBT','KTHC_INVOICE','backward','["truong_phong","boss"]','KTHC','[]');
-
--- ===== ban_vat_tu =====
-insert into public.crm_kanban_transitions (card_type,from_stage,to_stage,direction,allowed_roles,acting_dept,require_fields) values
- ('ban_vat_tu','KT_PROCESS','KTHC_INVOICE','forward','["truong_phong","boss"]','KT','["total_amount"]'),
- ('ban_vat_tu','KTHC_INVOICE','KTHC_DEBT','forward','["nhan_vien","truong_phong","boss"]','KTHC','["invoice_no","invoice_date"]'),
- ('ban_vat_tu','KTHC_DEBT','DONE','forward','["truong_phong","boss"]','KTHC','["payment_status"]'),
- ('ban_vat_tu','KTHC_INVOICE','KT_PROCESS','backward','["truong_phong","boss"]','KTHC','[]'),
- ('ban_vat_tu','KTHC_DEBT','KTHC_INVOICE','backward','["truong_phong","boss"]','KTHC','[]');
-
--- ===== thue_may (hợp đồng) =====
-insert into public.crm_kanban_transitions (card_type,from_stage,to_stage,direction,allowed_roles,acting_dept,require_fields) values
- ('thue_may','KD_OPEN','KD_WON','forward','["nhan_vien","truong_phong","boss"]','KD','[]'),
- ('thue_may','KD_WON','KT_PROCESS','forward','["truong_phong","boss"]','KD','[]'),
- ('thue_may','KT_PROCESS','RENTAL_ACTIVE','forward','["truong_phong","boss"]','KT','[]'),
- ('thue_may','RENTAL_ACTIVE','DONE','forward','["truong_phong","boss"]','KT','[]'),
- ('thue_may','KD_WON','KD_OPEN','backward','["truong_phong","boss"]','KD','[]'),
- ('thue_may','KT_PROCESS','KD_WON','backward','["truong_phong","boss"]','KT','[]');
-
--- ===== thue_may_ky (kỳ thuê) =====
-insert into public.crm_kanban_transitions (card_type,from_stage,to_stage,direction,allowed_roles,acting_dept,require_fields) values
- ('thue_may_ky','KTHC_INVOICE','KTHC_DEBT','forward','["nhan_vien","truong_phong","boss"]','KTHC','["invoice_no","invoice_date"]'),
- ('thue_may_ky','KTHC_DEBT','DONE','forward','["truong_phong","boss"]','KTHC','["payment_status"]'),
- ('thue_may_ky','KTHC_DEBT','KTHC_INVOICE','backward','["truong_phong","boss"]','KTHC','[]');
+Stages (track):
+```
+COM_NEW(commercial,10) COM_INVOICE(commercial,20) COM_DEBT(commercial,30) COM_DONE(commercial,40,terminal)
+TECH_TODO(technical,10) TECH_INSTALLED(technical,20) TECH_ACTIVE(technical,25) TECH_RECOVER(technical,30) TECH_DONE(technical,40,terminal)
 ```
 
----
+Quy ước vai (vai SPEC; `boss` KHÔNG có trong allowed_roles vì chỉ-xem):
+- forward cùng phòng: `[nhan_vien,truong_phong,admin]`
+- forward vượt phòng / đóng case: `[truong_phong,admin]`
 
-## 5. PHÂN QUYỀN & HIỂN THỊ (logic Edge Function)
-
-### 5.1. Quyền xem CỘT (board)
-Role chỉ thấy các cột mà:
-- `owner_dept` = phòng của user, **HOẶC**
-- là cột downstream/upstream liền kề trong luồng (hiển thị **read-only**, không kéo được), để biết "thẻ của mình giờ đang ở đâu".
-- **Boss** thấy tất cả cột, tất cả phòng, kéo được mọi transition hợp lệ.
-
-### 5.2. Quyền xem THẺ trong cột
-- **Boss / Trưởng phòng:** thấy mọi thẻ thuộc phòng mình (TP) hoặc mọi phòng (Boss).
-- **Nhân viên:** chỉ thấy thẻ `assigned_to = chính mình` HOẶC thẻ chưa giao (`assigned_to is null`) trong các cột phòng mình.
-
-### 5.3. Quyền KÉO (đã định nghĩa ở bảng transitions). Edge Function `kanban-move` kiểm tra thêm:
-- `user.role` ∈ `transition.allowed_roles`
-- `user.department` = `transition.acting_dept` (Boss bỏ qua check này)
-- nếu `user.role = 'nhan_vien'`: thẻ phải `assigned_to = user.id`
-- mọi field trong `transition.require_fields` phải có giá trị (khác null/rỗng) trong `crm_kanban_financials`
-
-### 5.4. Quyền xem FIELD (ẩn giá) — **ma trận lọc payload**
-
-Field tài chính chia 4 nhóm: `selling` (đơn giá, SL, thành tiền, tổng tiền), `cost` (giá vốn, margin), `billing` (số/ngày hóa đơn), `debt` (công nợ, hạn, đã trả, trạng thái TT).
-
-**Với thẻ máy (`ban_may`, `thue_may`, `thue_may_ky`):**
-
-| Nhóm field | Boss | KD-TP | KD-NV | KT-TP | KT-NV | KTHC-TP | KTHC-NV |
-|---|---|---|---|---|---|---|---|
-| selling | ✓ | ✓ | ✓(thẻ của mình) | ✗ | ✗ | ✓ | ✓ |
-| cost/margin | ✓ | ✗ | ✗ | ✗ | ✗ | ✓ | ✓ |
-| billing | ✓ | đọc | đọc(của mình) | ✗ | ✗ | ✓ | ✓ |
-| debt | ✓ | đọc | đọc(của mình) | ✗ | ✗ | ✓ | ✓ |
-
-**Với thẻ `ban_vat_tu`:**
-
-| Nhóm field | Boss | KT-TP | KT-NV | KTHC-TP | KTHC-NV |
-|---|---|---|---|---|---|
-| selling | ✓ | ✓ | ✓(của mình) | ✓ | ✓ |
-| cost/margin | ✓ | ✓ | ✗ | ✓ | ✓ |
-| billing | ✓ | đọc | ✗ | ✓ | ✓ |
-| debt | ✓ | ✗ | ✗ | ✓ | ✓ |
-
-> **Điểm mấu chốt:** "✗" nghĩa là **server không gửi field đó xuống**, không phải ẩn bằng CSS. "đọc" = gửi xuống nhưng frontend khóa không cho sửa.
-> Lưu ý hay: KT đẩy thẻ `ban_may` sang KTHC vẫn cần điều kiện `total_amount` đã có — server kiểm tra điều kiện này **mà không cần gửi giá xuống cho KT thấy**. Đây là lợi thế của việc kiểm tra ở server.
-> **Giá vốn (`cost_price`):** lấy mặc định từ danh mục sản phẩm khi admin khởi tạo sản phẩm (xem mục 11 về bảng sản phẩm). **KTHC-NV được phép xem giá vốn** (đã phản ánh ở hai bảng trên).
-
----
-
-## 6. EDGE FUNCTIONS (Deno)
-
-> **Lưu ý runtime (xem mục 0 điểm 5):** nếu `hast-crm` là Next.js/Node trên Vercel, hãy cài đặt 4 endpoint dưới đây thành **API routes trong app Vercel** thay vì Edge Functions Deno — logic, input/output, kiểm tra quyền **giữ nguyên 100%**, chỉ khác cú pháp runtime. Tên "Edge Function" bên dưới đọc là "secure endpoint".
-
-Thư mục: `supabase/functions/`. Tạo `_shared/` dùng chung.
-
-### 6.1. `_shared/auth.ts`
-```ts
-// Trả về { userId, role, department } từ token gửi lên.
-// GẮN VÀO HỆ AUTH HIỆN CÓ của dự án (crm_users + JWT_SECRET).
-// Yêu cầu: KHÔNG tin role do client gửi; phải resolve từ token/DB bằng service_role.
-export interface AuthCtx { userId: string; role: 'boss'|'truong_phong'|'nhan_vien'; department: 'KD'|'KT'|'KTHC'|null; }
-export async function getAuthContext(req: Request, admin /* service_role client */): Promise<AuthCtx> { /* TODO theo auth dự án */ }
+Transitions chính:
 ```
+# THƯƠNG MẠI — ban_may (origin KD)
+ban_may COM_NEW→COM_INVOICE  acting=KD   roles[TP,admin]
+ban_may COM_INVOICE→COM_DEBT acting=KTHC roles[NV,TP,admin] require[invoice_no,invoice_date]
+ban_may COM_DEBT→COM_DONE    acting=KD   roles[TP,admin] require[payment_status=paid]   # phòng tạo đơn đóng
+# (+ backward TP/admin)
 
-### 6.2. `_shared/visibility.ts`
-```ts
-// Cài đặt ma trận mục 5.4 dưới dạng config-driven.
-// fieldGroupsFor(ctx, card) -> Set<'selling'|'cost'|'billing'|'debt'> mà user được XEM
-// editableGroupsFor(ctx, card) -> tập group được SỬA
-// maskFinancials(financialRow, allowedGroups) -> object chỉ còn field thuộc group được phép
-// visibleColumnsFor(ctx) -> danh sách stage id; kèm cờ readOnly cho cột không phải phòng mình
+# THƯƠNG MẠI — ban_vat_tu (origin KT) : như ban_may nhưng acting COM_NEW→COM_INVOICE = KT, đóng = KT
+# THƯƠNG MẠI — thue_may_ky (kỳ thuê) : COM_INVOICE→COM_DEBT→COM_DONE (origin = KD), require như trên
+
+# KỸ THUẬT — ban_may
+ban_may TECH_TODO→TECH_INSTALLED acting=KT roles[NV,TP,admin]
+ban_may TECH_INSTALLED→TECH_DONE acting=KT roles[TP,admin]
+
+# KỸ THUẬT — thue_may
+thue_may TECH_TODO→TECH_ACTIVE   acting=KT roles[TP,admin]
+thue_may TECH_ACTIVE→TECH_RECOVER acting=KT roles[TP,admin]
+thue_may TECH_RECOVER→TECH_DONE  acting=KT roles[TP,admin]
 ```
+> `COM_DEBT→COM_DONE` vẫn bắt buộc `payment_status='paid'` (đóng khi thu đủ).
 
-### 6.3. `kanban-board` (GET) — đọc board đã lọc
-- Input: token. Optional filter `card_type`.
-- Logic: lấy stages → lọc theo `visibleColumnsFor` → lấy cards active hợp lệ theo mục 5.2 → join financials → **mask** theo mục 5.4 → trả `{ columns:[{stage, readOnly, cards:[{...card, financials: maskedOrNull}]}] }`.
-- **Không bao giờ** trả financials chưa mask.
+## 5. PHÂN QUYỀN & HIỂN THỊ
 
-### 6.4. `kanban-move` (POST) — CỔNG KIỂM SOÁT kéo-nhả
-```
-Input: { cardId, toStage }
-1. ctx = getAuthContext()
-2. card = load(cardId);  if !card -> 404
-3. t = transition where card_type=card.card_type, from=card.current_stage, to=toStage
-      if !t -> 403 "Không có luồng hợp lệ"
-4. if ctx.role not in t.allowed_roles -> 403
-5. if ctx.role != 'boss' and ctx.department != t.acting_dept -> 403
-6. if ctx.role == 'nhan_vien' and card.assigned_to != ctx.userId -> 403
-7. fin = load financials(cardId)
-   for f in t.require_fields: if empty(fin[f]) -> 422 "Thiếu điều kiện: <f>"
-7b. NẾU to_stage = 'DONE' và card_type ∈ {ban_may, ban_vat_tu, thue_may_ky}:
-      bắt buộc fin.payment_status = 'paid' -> nếu chưa thì 422 "Chưa thu đủ công nợ, không được đóng thẻ"
-8. update card.current_stage = toStage (+ status='done' nếu stage terminal)
-9. ghi log (xem 6.6) + trả card mới
-```
-> Đây là nơi DUY NHẤT được đổi `current_stage`. Không cho client update thẳng.
+### 5.0. Vai (4 vai, ánh xạ ở server, không đổi `crm_users`)
+`admin`→admin (toàn quyền, bỏ qua check phòng) · `boss`→boss (CHỈ XEM mọi thứ, mọi ghi→403) · `manager`→truong_phong · `staff`→nhan_vien. Phòng đọc động từ `crm_departments.code`.
 
-### 6.5. `kanban-card` (POST) — tạo/sửa thẻ + financials
-- Tạo: set `current_stage` = cột đầu của loại thẻ (ban_may/thue_may → `KD_OPEN`; ban_vat_tu → `KT_PROCESS`). Check user thuộc đúng phòng khởi tạo.
-- Sửa financials: chỉ ghi được các field thuộc group `editableGroupsFor`. Field ngoài quyền → bỏ qua, không lỗi mập mờ.
+### 5.1. Thấy CỘT/THẺ theo track + phòng
+- **KD** (TP/NV): chỉ thấy **cột thương mại** của thẻ `owner_dept=KD` (máy/thuê). KHÔNG thấy thẻ kỹ thuật.
+- **KTHC** (TP/NV): thấy **mọi thẻ thương mại** (máy, vật tư, kỳ thuê) để lên hóa đơn/thu nợ. Không thấy thẻ kỹ thuật.
+- **KT** (TP/NV): thấy **thẻ kỹ thuật** (cột lắp/giao/thu hồi) + **thẻ thương mại vật tư của chính KT** (KT là người bán vật tư). KHÔNG thấy luồng thương mại máy (KD↔KTHC). TP Kỹ thuật cũng vậy.
+- **admin**: thấy hết, kéo được. **boss**: thấy hết, read-only.
+- **NV**: trong phạm vi trên, chỉ thấy thẻ `assigned_to=mình` hoặc chưa giao trong phòng mình.
 
-### 6.6. `rental-period-create` (POST) — sinh thẻ kỳ thuê
-```
-Input: { contractCardId, periodLabel, periodStart, periodEnd }
-- Kiểm tra contract là thue_may và đang ở RENTAL_ACTIVE; user là KTHC/Boss (hoặc KD-TP tùy chính sách — mặc định KTHC + Boss).
-- Tạo card mới: card_type='thue_may_ky', current_stage='KTHC_INVOICE',
-  owner_dept='KTHC', parent_card_id=contractCardId, copy customer + period_*.
-- (Tùy chọn về sau) thêm pg_cron sinh tự động hằng kỳ. Bản đầu: tạo bằng nút bấm thủ công.
-```
+### 5.2. Thấy FIELD (ẩn giá)
+- **Thẻ kỹ thuật:** KHÔNG chứa field tài chính (chỉ tên/địa chỉ khách + tên máy/SL). KT không bao giờ thấy giá máy.
+- **Thẻ thương mại** — ma trận theo nhóm (`selling`=giá bán/tổng; `cost`=giá vốn/margin; `billing`=hóa đơn; `debt`=công nợ/thanh toán):
 
-### 6.7. Logging
-Tạo `crm_kanban_logs (id, card_id, actor_id, action, from_stage, to_stage, at)` và ghi mỗi lần move/create. Dùng để truy vết và phục vụ nghiệm thu.
+| nhóm | admin | phòng-tạo-đơn (KD máy / KT vật tư) | KTHC | boss |
+|---|---|---|---|---|
+| selling | ✓ | ✓ | ✓ | ✓ (đọc) |
+| cost | ✓ | ✗ | ✓ | ✓ (đọc) |
+| billing | ✓ | đọc | ✓ | ✓ (đọc) |
+| debt | ✓ | đọc | ✓ | ✓ (đọc) |
 
-### 6.8. Nhắc công nợ quá hạn — chạy bằng `pg_cron` (in-app)
-**Quy tắc:** thẻ `status='active'` ở cột `KTHC_DEBT` có `due_date < CURRENT_DATE` và `payment_status != 'paid'` là **quá hạn**. Cứ **15 ngày một lần**, tạo 1 notification in-app tới: **(1) tất cả user phòng KTHC** và **(2) người khởi tạo thẻ (`created_by`)**.
+"✗" = server không gửi field. "đọc" = gửi nhưng khóa sửa. `boss` = mọi field nhưng khóa sửa toàn bộ.
 
-**Cách làm (thuần SQL, không gọi HTTP ra ngoài):**
-- Thêm cột `crm_kanban_financials.last_reminded_at date`.
-- Viết hàm `public.fn_debt_reminder_scan()` (PL/pgSQL):
-  ```
-  với mỗi thẻ quá hạn mà (last_reminded_at IS NULL OR CURRENT_DATE - last_reminded_at >= 15):
-    - insert crm_notifications cho từng user KTHC + created_by
-      (type='debt_overdue', card_id, title/body có số ngày quá hạn)
-    - update financials.last_reminded_at = CURRENT_DATE
-    - insert crm_kanban_logs (action='debt_reminder')
-  ```
-- Bật extension và lên lịch:
-  ```sql
-  create extension if not exists pg_cron;
-  -- chạy 08:00 giờ VN = 01:00 UTC (Supabase chạy theo UTC)
-  select cron.schedule('debt-reminder-daily', '0 1 * * *', $$ select public.fn_debt_reminder_scan(); $$);
-  ```
-- **Lưu ý timezone:** Postgres/Supabase chạy UTC; `'0 1 * * *'` = 08:00 ICT. So sánh quá hạn dùng `CURRENT_DATE` là đủ (theo ngày).
+### 5.3. ⚠️ Đồng bộ bảo mật ngoài Kanban
+KT **không được thấy giá máy ở bất cứ đâu**. Vì giá nằm ở đơn hàng, phải đảm bảo **KT không truy cập được đơn bán máy / tab Bán hàng của KD**. KT chỉ thấy/tạo **đơn vật tư của KT** + khách hàng (tên/địa chỉ). **Kiểm tra & siết quyền tab "Bán hàng" cho vai KT** như một phần của task này (báo DK nếu cần đổi menu/route guard).
 
-### 6.9. Hệ thống notification in-app (chuông 🔔)
-Notification không chỉ cho công nợ — là **mọi phát sinh mới liên quan tới user**. Thiết kế bảng dùng chung:
-```sql
-create table public.crm_notifications (
-  id          uuid primary key default gen_random_uuid(),
-  user_id     uuid not null,                 -- người nhận (crm_users.id)
-  type        text not null,                 -- 'debt_overdue'|'card_assigned'|'card_handoff'|'card_returned'
-  title       text not null,
-  body        text,
-  card_id     uuid references public.crm_kanban_cards(id) on delete cascade,
-  is_read     boolean not null default false,
-  created_at  timestamptz not null default now()
-);
-create index idx_notif_user_unread on public.crm_notifications(user_id, is_read, created_at desc);
-```
-**Khi nào phát sinh notification (emit trong `kanban-move` / `kanban-card`):**
-- Thẻ được **giao cho** một nhân viên (`assigned_to` thay đổi) → báo người được giao (`card_assigned`).
-- Thẻ **bàn giao sang phòng khác** (forward vượt ranh giới phòng) → báo TP (và NV nếu có) của phòng nhận (`card_handoff`).
-- Thẻ bị **kéo lùi** (backward) → báo phòng/người mà thẻ quay về (`card_returned`).
-- Công nợ quá hạn (mục 6.8) → `debt_overdue`.
+## 6. SECURE ENDPOINTS (action `kanban.*`, Express)
+- `kanban.board` — trả board đã lọc theo track + phòng + role; mask field thẻ thương mại; thẻ kỹ thuật không kèm tài chính. Không bao giờ trả field chưa mask.
+- `kanban.move` — cổng kéo-nhả: `boss`→403; kiểm transition + role + acting_dept (admin bỏ qua) + NV chỉ kéo thẻ của mình + require_fields; `→COM_DONE` bắt `payment_status='paid'`; ghi log + emit notification.
+- **Auto-create hook** (trong `crudController` sau khi tạo `crm_orders`) — sinh thẻ theo §2. (Đây là phiên bản SẠCH thay cho `autoCreateWorkflowsForEntity` cũ đã gỡ.)
+- `kanban.rentalPeriod.create` — nút "Tạo kỳ thuê" trên thẻ kỹ thuật `thue_may` đang `TECH_ACTIVE`: sinh thẻ thương mại `thue_may_ky` ở `COM_INVOICE`. Vai KTHC/admin.
+- `kanban.card.update` — cập nhật field theo `editableGroupsFor` (KTHC cập nhật hóa đơn/thanh toán). **Bỏ** `kanban.card.create` thủ công (không còn tạo tay).
+- `kanban.notifications.list/read` — chuông in-app (dùng chung bảng `crm_notifications`, `entity_type='kanban_card'`).
+- `kanban.config.get` — trả cấu hình stages/track cho frontend (đảm bảo có action này, khớp tên FE↔BE).
+- `pg_cron` nhắc công nợ quá hạn 15 ngày (thẻ thương mại ở `COM_DEBT`) → notification cho KTHC + người tạo đơn (`created_by`/`assigned_to`).
 
-**Endpoint (Edge Function `kanban-notifications`):**
-- `GET` action `list` → trả notifications của chính user (mới nhất trước) + `unread_count`.
-- `POST` action `read` → đánh dấu đã đọc (1 cái hoặc tất cả).
-- Resolve người nhận từ token; **chỉ trả notification của chính user đó.**
-
-### 6.10. Lấy giá vốn mặc định từ danh mục sản phẩm
-Đã có **màn admin quản trị sản phẩm** (máy photocopy cũ/mới, vật tư linh kiện) kèm giá sản phẩm. **Trong giai đoạn KHẢO SÁT (mục 9.1), xác định tên bảng sản phẩm thật trong DB.** Sau đó:
-- Thêm cột `crm_kanban_cards.product_id uuid` (tham chiếu bảng sản phẩm) — có thể nhiều dòng sản phẩm/thẻ thì tách bảng line-item, nhưng bản đầu cho 1 sản phẩm/thẻ trước; **hỏi DK nếu cần nhiều dòng.**
-- Khi `kanban-card` tạo thẻ và chọn sản phẩm: **copy `cost_price` (và giá bán mặc định nếu có) từ bảng sản phẩm sang `crm_kanban_financials`** làm giá trị khởi tạo (vẫn cho sửa theo quyền). Danh mục "máy" → gợi ý `card_type` bán/thuê máy; "vật tư" → `ban_vat_tu`.
-- **Không** sửa màn admin sản phẩm hiện có; chỉ đọc tham chiếu từ nó.
-
----
-
-## 7. RLS / GRANTS
-
-> File: `supabase/migrations/003_kanban_rls.sql`
-
-Mô hình: client KHÔNG đọc thẳng bảng nhạy cảm; mọi thứ qua Edge Function (service_role bypass RLS). RLS làm lớp chặn cuối:
-```sql
-alter table public.crm_kanban_cards       enable row level security;
-alter table public.crm_kanban_financials  enable row level security;
-alter table public.crm_kanban_logs        enable row level security;
--- KHÔNG tạo policy cho phép anon/authenticated SELECT financials.
--- => client gọi trực tiếp sẽ bị chặn; chỉ Edge Function (service_role) đọc được.
-revoke all on public.crm_kanban_financials from anon, authenticated;
-```
-> Bảng `crm_kanban_stages` và `crm_kanban_transitions` có thể cho `authenticated` SELECT (chỉ là cấu hình, không nhạy cảm) để frontend biết tên cột.
-
-`crm_notifications`: bật RLS, chỉ cho user đọc notification của chính mình (`user_id = <uid hiện tại>`); việc ghi do Edge Function (service_role) thực hiện. Nếu auth dự án không phải Supabase Auth thì cho client đọc qua Edge Function `kanban-notifications` thay vì query thẳng.
-
----
+## 7. RLS — như v2: revoke `anon/authenticated` SELECT trên `crm_kanban_card_items`, `crm_kanban_financials`, `crm_kanban_cards`, `crm_kanban_logs`; truy cập qua action (service_role). `crm_notifications` giữ RLS hiện có.
 
 ## 8. FRONTEND
+- Tab giữ tên **"Quy trình"**. Board render từ `kanban.board` — **board mỗi vai chỉ hiện track của họ** (KD/KTHC: cột thương mại; KT: cột kỹ thuật). Bỏ dropdown loại thẻ nếu gây rối, hoặc lọc trong phạm vi đã được phép.
+- **Bỏ nút "Tạo thẻ mới".** Thêm nút "Tạo kỳ thuê" chỉ trên thẻ kỹ thuật thuê đang `TECH_ACTIVE` (vai KTHC/admin).
+- Kéo-nhả qua `kanban.move`; 4xx → trả thẻ về chỗ cũ + toast lý do.
+- Thẻ thương mại hiện field theo server gửi (ẩn giá vốn với KD); thẻ kỹ thuật chỉ hiện khách + máy/SL.
+- Chuông 🔔 dùng lại UI sẵn có; type `card_assigned/handoff/returned/debt_overdue`.
+- `js/config.js` giữ same-origin `/api` (đã sửa ở 1582c54).
 
-Files: `kanban.html`, `js/kanban.js`, `js/api.js`, `css/kanban.css`.
+## 9. THỰC HIỆN (đại tu v2→v3, KHÔNG đập lại từ đầu)
+**Giữ lại từ v2:** cơ chế bảo mật server, `kanban-auth`/`kanban-visibility`, RLS, chuông, pg_cron, máy trạng thái, ánh xạ vai.
+**Sửa:** schema (thêm order_id/track/customer_address, §3); seed lại stages/transitions hai luồng (§4); thêm auto-create hook từ đơn (§2); bỏ tạo thẻ tay; sửa visibility theo track (§5); siết quyền tab Bán hàng cho KT (§5.3); frontend board theo track (§8); thêm/khớp `kanban.config.get`.
+**Dọn:** TRUNCATE thẻ test v2. `crm_workflows` cũ vẫn **chưa drop** (migration 005 giữ chờ DK).
+**Backup branch riêng, chưa merge main.**
 
-- Render board từ output `kanban-board` (server đã quyết cột nào hiện, thẻ nào hiện, field nào có). **Frontend không tự suy luận quyền** — chỉ vẽ những gì server trả.
-- Cột có `readOnly=true`: hiện thẻ mờ, **không cho kéo vào/ra**.
-- Kéo-nhả: thư viện gợi ý SortableJS. Khi thả → gọi `kanban-move`. Nếu server trả 4xx → **bật lại thẻ về vị trí cũ** và hiện toast lý do (vd "Thiếu điều kiện: invoice_no").
-- Thẻ chỉ hiện field financials nếu server có gửi; field "đọc" thì khóa input.
-- Nút "Tạo kỳ thuê" chỉ hiện trên thẻ `thue_may` ở `RENTAL_ACTIVE` và với role được phép.
-- Gọi API: `fetch(ENDPOINT_URL, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: JSON.stringify(...) })`. Nếu endpoint là API route same-origin trên Vercel thì dùng đường dẫn tương đối (`/api/kanban/move`…), không vướng CORS. Nếu là Supabase Edge Function thì dùng URL function. Dù cách nào cũng KHÔNG áp quy tắc GET-only của Apps Script.
-- **Không lưu `service_role` key hay PAT ở localStorage.** Frontend chỉ giữ token phiên của user.
-- **Chuông notification 🔔:** ở header board, hiển thị `unread_count`, mở ra danh sách (gọi `kanban-notifications` action `list`). Bấm vào 1 mục → mở thẻ liên quan (`card_id`) + đánh dấu đã đọc. Có thể poll mỗi 30–60 giây hoặc refresh khi đổi tab. Mỗi mục hiện title/body + thời gian.
+## 10. NGHIỆM THU
+1. Tạo đơn bán máy (KD) → tự sinh **2 thẻ**: 1 thương mại ở `COM_NEW` (KD thấy, có giá), 1 kỹ thuật ở **`Lắp máy`** (KT thấy, KHÔNG giá; không có cột "Đơn mới").
+2. KD kéo thẻ thương mại `Đơn mới→Lên hóa đơn`; KTHC kéo `Lên hóa đơn→Đã lên hóa đơn` (bắt buộc có số/ngày HĐ); KD/KTHC ghi thanh toán → khi **số dư công nợ = 0 → thẻ TỰ ĐỘNG sang Hoàn thành** (không ai kéo).
+3. **Thanh toán có xác nhận:** KD nhập 1 khoản → trạng thái `pending`, công nợ CHƯA giảm; KTHC xác nhận → công nợ giảm đúng số. KTHC nhập trực tiếp → giảm luôn.
+4. **Đóng tay/xóa nợ:** admin và KTHC-TP force-đóng được thẻ còn nợ (ghi lý do); vai khác không.
+5. **Kéo lùi:** TP/admin lùi được 1 bước (vd `Đã lên hóa đơn→Lên hóa đơn`); cấm về `Đơn mới`; NV không lùi được.
+6. KT kéo thẻ kỹ thuật `Lắp máy→Hoàn thành` độc lập; KT-NV mở thẻ kỹ thuật chỉ thấy tên/địa chỉ khách + máy/SL, **payload Network không có giá**.
+7. **KD THẤY thẻ kỹ thuật để theo dõi nhưng KHÔNG kéo được** (chỉ KT kéo). KT **không** thấy thẻ thương mại máy. KTHC thấy mọi thẻ thương mại.
+8. Tạo đơn vật tư (KT) → chỉ 1 thẻ thương mại (KT thấy giá vật tư) → KTHC; KHÔNG sinh thẻ kỹ thuật.
+9. KT mở/đọc đơn bán máy hoặc tab Bán hàng KD → **bị chặn** (không thấy giá máy ở bất kỳ đâu).
+10. Snapshot: đổi giá sản phẩm trong danh mục → mở thẻ cũ vẫn hiện giá lúc tạo đơn.
+11. `boss` xem hết (cả 2 track), mọi kéo/sửa/ghi → 403.
+12. Bỏ được nút "Tạo thẻ mới"; thẻ chỉ sinh từ đơn (riêng "Tạo kỳ thuê" vẫn còn).
+13. Công nợ quá hạn 15 ngày (thẻ ở `Đã lên hóa đơn`) → KTHC + người tạo đơn nhận `debt_overdue`.
+14. RLS chặn anon đọc thẳng bảng tài chính/items/cards/payments.
+15. **Thuê máy:** đơn (KD) → thẻ kỹ thuật `Lắp/giao → Đang cho thuê → Thu hồi → Hoàn thành`; **KT-NV** bấm "Tạo kỳ thuê" → sinh thẻ thương mại kỳ ở `Đơn mới` (owner KT) → đẩy sang KTHC → tự đóng khi thu đủ. KT thấy phí thuê, không thấy giá vốn máy.
 
----
+## 11. QUYẾT ĐỊNH ĐÃ CHỐT
+- Hai thẻ/đơn máy (thương mại + kỹ thuật), độc lập, đóng riêng.
+- Sinh từ đơn hàng; bỏ tạo thẻ tay (giữ "Tạo kỳ thuê").
+- Snapshot giá/giá vốn/SP/khách tại thời điểm tạo đơn; thanh toán/công nợ cập nhật động.
+- Bỏ cột Cơ hội/Báo giá. Bỏ luồng bảo trì (coi là bán vật tư).
+- KT cô lập tuyệt đối khỏi giá máy (Kanban + tab Bán hàng).
+- **Kéo:** KD đẩy Đơn mới→Lên hóa đơn; KTHC Lên→Đã lên hóa đơn; auto Hoàn thành khi số dư=0; KT kéo luồng kỹ thuật. KD chỉ XEM luồng kỹ thuật.
+- **Thanh toán:** KD nhập khoản `pending` → KTHC xác nhận mới trừ công nợ; số dư=0 → tự đóng.
+- **Đóng tay/xóa nợ:** admin + KTHC-TP. **Kéo lùi:** TP/admin 1 bước, cấm về Đơn mới.
+- **Thuê máy:** thẻ kỹ thuật KT (giao→thuê→thu hồi); billing kỳ do KT-NV phụ trách (như vật tư).
 
-## 9. ĐẬP BỎ CÁI CŨ — KỶ LUẬT CHỐNG NHẦM LẪN (ĐỌC KỸ)
-
-> ⚠️ Module Kanban **đã từng tồn tại** và có vấn đề. Rủi ro lớn nhất là **trộn lẫn code cũ với code mới** rồi sửa nửa vời. Phải làm theo đúng trình tự "khảo sát → backup → DK duyệt → mới xóa → xây mới sạch".
-
-### 9.1. Giai đoạn KHẢO SÁT trước (không sửa gì cả)
-1. Quét toàn repo, **liệt kê đầy đủ** mọi thứ liên quan Kanban cũ: bảng DB (tên thật), Edge Functions, file HTML/JS/CSS, route, biến môi trường. Ghi ra `archive/INVENTORY_<ngày>.md`.
-1b. **Xác định runtime của app** (mục 0 điểm 5): `hast-crm.vercel.app` là Next.js/Node có API routes (xem có `supabaseClient.js`, `api/`, `pages/api`, `app/api`, `next.config.*`) hay frontend tĩnh? Báo DK kết luận + nơi sẽ đặt secure endpoints (Vercel API routes vs Supabase Edge Functions). Cũng xác nhận `pg_cron` có bật được trên project Supabase không.
-2. **Đừng tin tên gọi suy đoán.** Mở từng file/bảng kiểm tra nội dung thật trước khi kết luận "đây là cũ".
-3. Trình danh sách này cho DK duyệt. **Chờ xác nhận. Không xóa/sửa gì trong giai đoạn này.**
-
-### 9.2. Tránh nhầm lẫn cũ ↔ mới
-- Schema mới dùng đúng tên trong spec: `crm_kanban_cards`, `crm_kanban_financials`, `crm_kanban_stages`, `crm_kanban_transitions`, `crm_kanban_logs`. **Nếu tên này TRÙNG với bảng cũ → KHÔNG ghi đè.** Báo DK; thống nhất đổi tên hoặc drop bảng cũ trước (sau khi backup).
-- File frontend cũ: di chuyển vào `archive/old_kanban_<ngày>/`, **không** để lẫn trong thư mục đang chạy. Frontend mới là file mới hoàn toàn theo mục 8, **không** copy-sửa từ file cũ (dễ mang theo logic phân quyền sai của bản cũ).
-- Edge Function cũ: vô hiệu hoá/xoá hẳn sau khi bản mới chạy được; **không** để hai function cùng đụng một bảng.
-- **Không migrate logic cũ.** Xây lại từ móng theo spec này. Chỉ migrate **dữ liệu** (nếu DK cần), không migrate code.
-
-### 9.3. Backup bắt buộc trước khi xóa
-1. Export dữ liệu bảng Kanban cũ ra CSV/SQL dump, lưu `archive/old_kanban_<ngày>/`.
-2. Copy toàn bộ file frontend/Edge Function cũ vào cùng thư mục archive. **Không xóa thẳng.**
-
-### 9.4. Trình tự xóa (chỉ làm SAU khi DK xác nhận danh sách ở 9.1)
-1. DK xác nhận tên bảng/file được phép bỏ.
-2. Drop bảng cũ → xóa function cũ → thay file frontend.
-3. Chạy migration mới (001→002→003), deploy function mới, deploy frontend mới.
-4. Chạy checklist nghiệm thu mục 10.
-
-### 9.5. Không đụng tới phần khác
-Ngoài việc thêm cột `role`/`department` cho `crm_users` nếu thiếu, **không** sửa các module CRM khác (đăng nhập, khách hàng, sản phẩm…). Nếu phát hiện Kanban cũ móc nối vào module khác, **dừng lại hỏi DK** thay vì tự sửa lan ra.
-
----
-
-## 10. TIÊU CHÍ NGHIỆM THU (phải pass hết)
-
-1. NV phòng KD mở board → **không** thấy field giá vốn/margin của bất kỳ thẻ nào (kiểm tra cả tab Network, payload không chứa `cost_price`).
-2. KT mở thẻ `ban_may` → **không** thấy bất kỳ field tài chính nào; payload không chứa giá. Nhưng KT vẫn đẩy được thẻ sang KTHC nếu giá đã được nhập (server tự kiểm).
-3. KT mở thẻ `ban_vat_tu` → thấy giá bán vật tư; KT-NV không thấy giá vốn, KT-TP thấy.
-4. NV chỉ thấy thẻ được giao cho mình; thử kéo thẻ của người khác → bị chặn 403.
-5. Kéo thẻ vượt cột không liền kề / sai luồng → 403 "không có luồng hợp lệ".
-6. Kéo `KD_WON → KT_PROCESS` (ban_may) khi chưa nhập `total_amount` → 422 thiếu điều kiện.
-7. Kéo `KTHC_DEBT → DONE` khi `payment_status != 'paid'` → 422 "Chưa thu đủ công nợ". Chỉ khi đã thu đủ mới đóng được thẻ.
-8. Nút "Tạo kỳ thuê" trên hợp đồng `RENTAL_ACTIVE` → sinh đúng 1 thẻ `thue_may_ky` mới ở `KTHC_INVOICE`, gắn `parent_card_id`.
-9. Gọi thẳng `crm_kanban_financials` bằng anon/authenticated key từ client → bị RLS chặn.
-10. Mọi move đều có 1 dòng trong `crm_kanban_logs`.
-11. Khi giao thẻ cho NV / bàn giao sang phòng khác / kéo lùi → đúng user nhận được notification, chuông 🔔 tăng `unread_count`; user khác **không** thấy notification không phải của mình.
-12. Thẻ công nợ quá hạn > 15 ngày → KTHC + người khởi tạo nhận notification `debt_overdue`; chạy lại job trong vòng 15 ngày **không** gửi trùng (nhờ `last_reminded_at`).
-13. Tạo thẻ chọn sản phẩm → `cost_price` tự điền từ danh mục sản phẩm; KTHC-NV xem được, KD/KT(với máy) không thấy.
-
----
-
-## 11. TRẠNG THÁI CÁC QUYẾT ĐỊNH
-
-**Đã chốt:**
-- Đóng thẻ về `DONE`: **bắt buộc đã thu đủ công nợ** (`payment_status='paid'`). Đã đưa vào `kanban-move` mục 6.4 (bước 7b).
-- Công nợ quá hạn: cứ **15 ngày** nhắc 1 lần tới **KTHC + người khởi tạo thẻ**. Logic ở mục 6.8.
-- **KTHC-NV được xem giá vốn** (mặc định từ danh mục sản phẩm). Đã phản ánh ở mục 5.4.
-- Ai bấm "Tạo kỳ thuê": **KTHC + Boss**.
-
-**CÒN CHỜ DK CHỐT (Claude Code KHÔNG code phần liên quan tới khi có xác nhận):**
-1. ✅ **Kênh notification: in-app** (chuông 🔔, bảng `crm_notifications`, mục 6.9). Notification cho mọi phát sinh liên quan tới user, không chỉ công nợ.
-2. ✅ **Cơ chế lịch: `pg_cron`** chạy hằng ngày, hàm SQL thuần (mục 6.8). Bật extension `pg_cron`. Nếu khi khảo sát phát hiện project không bật được `pg_cron`, **báo DK** để chuyển sang GitHub Actions cron gọi Edge Function.
-3. ✅ **Giá vốn: lấy từ bảng danh mục sản phẩm có sẵn** (màn admin nhập máy/vật tư kèm giá). Mục 6.10. **Việc còn lại = KHẢO SÁT tìm tên bảng sản phẩm thật** ở giai đoạn 9.1, rồi wire `cost_price` mặc định. Nếu cần nhiều dòng sản phẩm trên một thẻ thì hỏi DK trước.
-
-→ Tất cả quyết định đã chốt. Claude Code có thể làm trọn vẹn, chỉ cần dừng ở các checkpoint của mục 9 và xác nhận tên bảng sản phẩm.
-```
+**Điểm CC cần hỏi DK khi build:** nguồn sự thật thanh toán (sổ `crm_kanban_payments` vs công nợ trên `crm_orders`) & cách đồng bộ; chu kỳ tạo kỳ thuê (tay/pg_cron); cách guard tab Bán hàng cho KT; có cần bước "Thu hồi máy" cuối kỳ thuê hay giữ đơn giản như lắp máy.
